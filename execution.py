@@ -1,126 +1,356 @@
+"""
+MT5 order execution.
+
+Changes from the original:
+
+  * Every attempt carries a client_order_id, stamped into the MT5
+    order comment. That tag is what makes execution idempotent: after a
+    crash we can ask MT5 "did this specific attempt reach you?" instead
+    of guessing and re-sending. (Phase 13)
+
+  * execute_trade no longer raises on rejection. It returns a
+    structured result so the caller can persist the rejection - the old
+    behaviour discarded rejected trades entirely.
+
+  * Price / SL / TP / volume / magic maths is UNCHANGED.
+"""
+
+import uuid
+
 import MetaTrader5 as mt5
 
+import config
 from config import SL_PERCENT, TP_PERCENT
 
 
-def execute_trade(symbol, signal):
+# MT5 truncates order comments (31 chars on most builds), so the tag is
+# kept short: "AIQ-" + 12 hex characters = 16 characters.
+COMMENT_PREFIX = "AIQ-"
+
+SHORT_ID_LENGTH = 12
+
+
+def new_client_order_id():
+    """Unique id for one execution attempt."""
+
+    return uuid.uuid4().hex
+
+
+def comment_for(client_order_id):
+    """The MT5 comment tag derived from a client order id."""
+
+    return f"{COMMENT_PREFIX}{client_order_id[:SHORT_ID_LENGTH]}"
+
+
+def _result_payload(result):
+    """MT5's result object as a plain dict, for the audit trail."""
+
+    if result is None:
+        return None
+
+    return {
+        "retcode": getattr(result, "retcode", None),
+        "comment": getattr(result, "comment", None),
+        "order": getattr(result, "order", None),
+        "deal": getattr(result, "deal", None),
+        "volume": getattr(result, "volume", None),
+        "price": getattr(result, "price", None),
+        "request_id": getattr(result, "request_id", None),
+    }
+
+
+def find_deal_by_client_order_id(client_order_id, lookback_seconds=3600):
     """
-    Execute a market trade on MetaTrader 5.
+    Ask MT5 whether an attempt actually reached the server.
 
-    Args:
-        symbol (str): Trading symbol, e.g. "EURUSDm"
-        signal (str): "BUY", "SELL", or "HOLD"
-
-    Returns:
-        MT5 order result object.
+    Used by the reconciler to resolve PENDING rows orphaned by a crash
+    between order_send and the database write. Returns a dict with the
+    deal details, or None if MT5 never saw it.
     """
 
-    # ---------------------------------------------------------
-    # 1. Validate signal
-    # ---------------------------------------------------------
+    from datetime import datetime, timedelta, timezone
+
+    tag = comment_for(client_order_id)
+
+    now = datetime.now(timezone.utc)
+
+    deals = mt5.history_deals_get(
+        now - timedelta(seconds=lookback_seconds),
+        now + timedelta(seconds=60),
+    )
+
+    if not deals:
+        return None
+
+    for deal in deals:
+
+        if getattr(deal, "comment", "") and tag in deal.comment:
+
+            return {
+                "deal_ticket": deal.ticket,
+                "order_ticket": deal.order,
+                "position_ticket": getattr(deal, "position_id", None),
+                "entry_price": deal.price,
+                "volume": deal.volume,
+                "symbol": deal.symbol,
+                "profit": getattr(deal, "profit", 0.0),
+            }
+
+    return None
+
+
+def _resolve_position_ticket(result):
+    """
+    Map the filled deal back to its position id.
+
+    result.order is an ORDER ticket; positions are keyed by position id,
+    and the two are not always the same number.
+    """
+
+    deal_ticket = getattr(result, "deal", None)
+
+    if deal_ticket:
+        deals = mt5.history_deals_get(ticket=deal_ticket)
+
+        if deals:
+            position_id = getattr(deals[0], "position_id", None)
+
+            if position_id:
+                return position_id
+
+    # Fall back to the order ticket, which matches for simple fills.
+    return getattr(result, "order", None)
+
+
+def execute_trade(symbol, signal, client_order_id=None, volume=None):
+    """
+    Execute a market trade through MetaTrader 5.
+
+    Returns a dict:
+        {
+            "status": "EXECUTED" | "REJECTED" | "FAILED" | "SKIPPED",
+            "client_order_id": str,
+            ...
+        }
+
+    Never raises for a trading outcome - a rejection is data, not an
+    exception.
+    """
+
     signal = signal.upper()
+
+    client_order_id = client_order_id or new_client_order_id()
+
+    volume = config.LOT_SIZE if volume is None else volume
 
     if signal == "HOLD":
         return {
             "status": "SKIPPED",
-            "reason": "AI signal is HOLD"
+            "client_order_id": client_order_id,
+            "reason": "AI signal is HOLD",
         }
 
     if signal not in {"BUY", "SELL"}:
-        raise ValueError(
-            f"Invalid trading signal: {signal}"
-        )
+        return {
+            "status": "FAILED",
+            "client_order_id": client_order_id,
+            "reason": f"Invalid signal: {signal}",
+        }
 
     # ---------------------------------------------------------
-    # 2. Get symbol information
+    # Symbol information
     # ---------------------------------------------------------
+
     symbol_info = mt5.symbol_info(symbol)
 
     if symbol_info is None:
-        raise RuntimeError(
-            f"Could not retrieve symbol information for {symbol}"
-        )
+        return {
+            "status": "FAILED",
+            "client_order_id": client_order_id,
+            "reason": f"Symbol not found: {symbol} | {mt5.last_error()}",
+        }
 
-    # Make sure the symbol is visible in Market Watch
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
-            raise RuntimeError(
-                f"Could not select symbol {symbol}"
-            )
+            return {
+                "status": "FAILED",
+                "client_order_id": client_order_id,
+                "reason": f"Could not select symbol: {symbol}",
+            }
 
         symbol_info = mt5.symbol_info(symbol)
 
     # ---------------------------------------------------------
-    # 3. Get current market price
+    # Current price
     # ---------------------------------------------------------
+
     tick = mt5.symbol_info_tick(symbol)
 
     if tick is None:
-        raise RuntimeError(
-            f"Could not retrieve tick data for {symbol}"
-        )
+        return {
+            "status": "FAILED",
+            "client_order_id": client_order_id,
+            "reason": f"No tick data for {symbol} | {mt5.last_error()}",
+        }
 
     # ---------------------------------------------------------
-    # 4. Determine order type and entry price
+    # Price / SL / TP  (unchanged maths)
     # ---------------------------------------------------------
+
     if signal == "BUY":
+
         order_type = mt5.ORDER_TYPE_BUY
         price = tick.ask
 
-        # BUY:
-        # SL below entry
-        # TP above entry
         sl = price * (1 - SL_PERCENT)
         tp = price * (1 + TP_PERCENT)
 
-    else:  # SELL
+    else:
+
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
 
-        # SELL:
-        # SL above entry
-        # TP below entry
         sl = price * (1 + SL_PERCENT)
         tp = price * (1 - TP_PERCENT)
 
     # ---------------------------------------------------------
-    # 5. CRITICAL: Round SL and TP using symbol digits
+    # CRITICAL: use broker's digits
     # ---------------------------------------------------------
+
     digits = symbol_info.digits
 
+    price = round(price, digits)
     sl = round(sl, digits)
     tp = round(tp, digits)
-    price = round(price, digits)
+
+    order_comment = comment_for(client_order_id)
 
     # ---------------------------------------------------------
-    # 6. Build MT5 trade request
+    # Print what we're attempting
     # ---------------------------------------------------------
+
+    print("\n========================================")
+    print("ATTEMPTING MT5 TRADE")
+    print("Symbol:", symbol)
+    print("Signal:", signal)
+    print("Price:", price)
+    print("SL:", sl)
+    print("TP:", tp)
+    print("Digits:", digits)
+    print("Volume:", volume)
+    print("Tag:", order_comment)
+    print("========================================")
+
+    # ---------------------------------------------------------
+    # Trade request
+    # ---------------------------------------------------------
+
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": 0.01,
+        "volume": volume,
         "type": order_type,
         "price": price,
         "sl": sl,
         "tp": tp,
-        "deviation": 20,
-        "magic": 100001,
-        "comment": "AI Hedge Fund Bot",
+        "deviation": config.DEVIATION,
+        "magic": config.MAGIC_NUMBER,
+        "comment": order_comment,
         "type_time": mt5.ORDER_TIME_GTC,
+
+        # Let MT5 use the symbol's supported filling mode
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
+    # Everything the caller needs to persist the attempt, whatever
+    # happens next.
+    attempt = {
+        "client_order_id": client_order_id,
+        "symbol": symbol,
+        "direction": signal,
+        "volume": volume,
+        "requested_price": price,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "magic": config.MAGIC_NUMBER,
+        "mt5_comment": order_comment,
+    }
+
     # ---------------------------------------------------------
-    # 7. Send trade
+    # Send order
     # ---------------------------------------------------------
-    result = mt5.order_send(request)
+
+    try:
+        result = mt5.order_send(request)
+    except Exception as error:                      # noqa: BLE001
+        return {
+            **attempt,
+            "status": "FAILED",
+            "reason": f"order_send raised: {error}",
+        }
 
     if result is None:
-        raise RuntimeError(
-            f"MT5 order_send() failed: {mt5.last_error()}"
-        )
+
+        # Ambiguous: the order may or may not have reached the server.
+        # The reconciler resolves this by searching MT5 history for our
+        # comment tag rather than re-sending.
+        return {
+            **attempt,
+            "status": "FAILED",
+            "reason": (
+                f"order_send returned None | "
+                f"MT5 error: {mt5.last_error()}"
+            ),
+            "ambiguous": True,
+        }
 
     # ---------------------------------------------------------
-    # 8. Return MT5 result
+    # ALWAYS inspect the MT5 result
     # ---------------------------------------------------------
-    return result
+
+    print("\n========================================")
+    print("MT5 ORDER RESULT")
+    print("Retcode:", result.retcode)
+    print("Comment:", result.comment)
+    print("Order:", result.order)
+    print("Deal:", result.deal)
+    print("Volume:", result.volume)
+    print("Price:", result.price)
+    print("========================================\n")
+
+    payload = _result_payload(result)
+
+    # ---------------------------------------------------------
+    # Successful market execution
+    # ---------------------------------------------------------
+
+    successful_codes = {
+        mt5.TRADE_RETCODE_DONE,
+        mt5.TRADE_RETCODE_DONE_PARTIAL,
+    }
+
+    if result.retcode not in successful_codes:
+
+        return {
+            **attempt,
+            "status": "REJECTED",
+            "reason": (
+                f"MT5 REJECTED TRADE | "
+                f"retcode={result.retcode} | "
+                f"comment={result.comment}"
+            ),
+            "mt5_retcode": result.retcode,
+            "raw_result": payload,
+        }
+
+    return {
+        **attempt,
+        "status": "EXECUTED",
+        "mt5_retcode": result.retcode,
+        "order_ticket": result.order,
+        "deal_ticket": result.deal,
+        "position_ticket": _resolve_position_ticket(result),
+        "entry_price": result.price or price,
+        "filled_volume": result.volume,
+        "raw_result": payload,
+    }

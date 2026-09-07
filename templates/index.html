@@ -1,4 +1,3 @@
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -279,13 +278,51 @@
 
             </div>
 
-            <div class="mt-2 flex items-center gap-2">
+            <div class="mt-2 flex items-center justify-between gap-2">
 
-                <div id="equityDot" class="h-1.5 w-1.5 rounded-full bg-zinc-600"></div>
+                <div class="flex items-center gap-2">
 
-                <span class="text-[10px] uppercase tracking-widest text-zinc-500">
-                    MT5 Account
+                    <div id="equityDot" class="h-1.5 w-1.5 rounded-full bg-zinc-600"></div>
+
+                    <span class="text-[10px] uppercase tracking-widest text-zinc-500">
+                        MT5 Account
+                    </span>
+
+                </div>
+
+                <span
+                    id="realizedPnl"
+                    class="text-[10px] uppercase tracking-widest text-zinc-500"
+                >
+                    P&amp;L --
                 </span>
+
+            </div>
+
+            <!-- Equity curve, redrawn from stored snapshots on every load -->
+            <div class="mt-4">
+
+                <canvas
+                    id="equityChart"
+                    class="w-full"
+                    style="height: 72px;"
+                ></canvas>
+
+                <div class="mt-1 flex items-center justify-between">
+
+                    <span
+                        id="equityRangeLabel"
+                        class="text-[9px] uppercase tracking-widest text-zinc-600"
+                    >
+                        No history yet
+                    </span>
+
+                    <span
+                        id="equityPointCount"
+                        class="text-[9px] uppercase tracking-widest text-zinc-700"
+                    ></span>
+
+                </div>
 
             </div>
 
@@ -301,17 +338,32 @@
             <div class="flex items-center justify-between">
 
                 <div class="text-[10px] uppercase tracking-[0.22em] text-zinc-500">
-                    AI Logic
+                    AI Signal Score
                 </div>
 
                 <div
                     id="confidence"
                     class="text-sm font-semibold text-lime"
                 >
-                    0%
+                    0/100
                 </div>
 
             </div>
+
+            <!--
+                Per-symbol selector. The AI panel used to show one
+                global value that every symbol in the cycle overwrote,
+                so it could contradict the execution feed.
+            -->
+            <div
+                id="symbolTabs"
+                class="mt-3 flex flex-wrap gap-1.5"
+            ></div>
+
+            <div
+                id="decisionMeta"
+                class="mt-3 flex flex-wrap items-center gap-2 text-[9px] uppercase tracking-widest text-zinc-600"
+            ></div>
 
             <div
                 id="logic"
@@ -320,7 +372,12 @@
                 Waiting for market intelligence...
             </div>
 
-            <!-- Confidence bar -->
+            <div
+                id="overrideNotice"
+                class="mt-2 hidden rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] leading-4 text-amber-300"
+            ></div>
+
+            <!-- Score bar -->
             <div class="mt-4 h-1 overflow-hidden rounded-full bg-white/5">
 
                 <div
@@ -329,6 +386,10 @@
                     style="box-shadow: 0 0 10px rgba(117,224,99,0.5);"
                 ></div>
 
+            </div>
+
+            <div class="mt-2 text-[9px] leading-3 text-zinc-600">
+                Model conviction score, not a calibrated probability.
             </div>
 
         </div>
@@ -415,12 +476,46 @@
     const intervalSelect = document.getElementById("intervalSelect");
     const connectionStatus = document.getElementById("connectionStatus");
 
+    const symbolTabs = document.getElementById("symbolTabs");
+    const decisionMeta = document.getElementById("decisionMeta");
+    const overrideNotice = document.getElementById("overrideNotice");
+
+    const equityChart = document.getElementById("equityChart");
+    const equityRangeLabel = document.getElementById("equityRangeLabel");
+    const equityPointCount = document.getElementById("equityPointCount");
+    const realizedPnl = document.getElementById("realizedPnl");
+
 
     // ============================================================
     // LOCAL STATE
     // ============================================================
 
-    let knownTrades = new Set();
+    /*
+     * Trades are keyed by their DATABASE id, so the feed dedupes
+     * correctly across a page refresh and across a backend restart.
+     * The previous version built a synthetic key from array index and
+     * replayed the whole feed on every reload.
+     */
+
+    let knownTradeIds = new Set();
+
+    /*
+     * id -> signature of the mutable fields. A card is only rebuilt
+     * when its status or P&L actually changed, so the feed isn't
+     * thrown away and re-rendered on every 3s poll.
+     */
+
+    let tradeSignatures = new Map();
+
+    let lastTradeId = 0;
+
+    let decisionsBySymbol = [];
+
+    let selectedSymbol = null;
+
+    let equitySeries = [];
+
+    let historyLoaded = false;
 
     let networkNodes = [];
 
@@ -753,24 +848,41 @@
     // ADD TRADE TO EXECUTION FEED
     // ============================================================
 
-    function addTradeToFeed(trade) {
+    /*
+     * The status shown here is the trade's REAL execution status from
+     * the database. The previous version printed the literal string
+     * "EXECUTED" on every card, including rejected orders.
+     */
 
-        if (emptyFeed) {
-            emptyFeed.remove();
-        }
+    const statusStyles = {
+        EXECUTED: "text-lime",
+        CLOSED: "text-zinc-400",
+        PENDING: "text-amber-400",
+        REJECTED: "text-red-400",
+        FAILED: "text-red-400"
+    };
+
+
+    function buildTradeCard(trade) {
 
         const entry = document.createElement("div");
 
         entry.className =
             "trade-entry mb-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4";
 
-        const color =
-            getAssetColor(trade.asset);
+        entry.dataset.tradeId = trade.id;
+
+        const color = getAssetColor(trade.asset);
 
         const signalClass =
             trade.signal === "BUY"
                 ? "text-lime"
                 : "text-red-400";
+
+        const status = trade.status || "PENDING";
+
+        const statusClass =
+            statusStyles[status] || "text-zinc-600";
 
         const time =
             new Date(trade.time).toLocaleTimeString(
@@ -782,6 +894,40 @@
                 }
             );
 
+        const date =
+            new Date(trade.time).toLocaleDateString(
+                [],
+                {
+                    month: "short",
+                    day: "numeric"
+                }
+            );
+
+        // P&L only exists once the trade has actually closed.
+        let pnlHtml = "";
+
+        if (trade.pnl !== null && trade.pnl !== undefined) {
+
+            const pnlClass =
+                trade.pnl > 0
+                    ? "text-lime"
+                    : (trade.pnl < 0 ? "text-red-400" : "text-zinc-500");
+
+            const sign = trade.pnl > 0 ? "+" : "";
+
+            pnlHtml = `
+                <span class="text-[10px] font-semibold ${pnlClass}">
+                    ${sign}${Number(trade.pnl).toFixed(2)}
+                </span>
+            `;
+        }
+
+        const scoreHtml =
+            (trade.score !== null && trade.score !== undefined)
+                ? `<span class="text-[9px] uppercase tracking-widest text-zinc-600">
+                       Score ${escapeHtml(String(trade.score))}/100
+                   </span>`
+                : "";
 
         entry.innerHTML = `
 
@@ -804,7 +950,7 @@
                 </div>
 
                 <span class="text-[9px] text-zinc-600">
-                    ${time}
+                    ${date} ${time}
                 </span>
 
             </div>
@@ -816,10 +962,19 @@
                     ${escapeHtml(trade.signal)}
                 </span>
 
-                <span class="text-[9px] uppercase tracking-widest text-zinc-600">
-                    EXECUTED
-                </span>
+                <div class="flex items-center gap-3">
+                    ${pnlHtml}
 
+                    <span class="text-[9px] uppercase tracking-widest ${statusClass}">
+                        ${escapeHtml(status)}
+                    </span>
+                </div>
+
+            </div>
+
+
+            <div class="mt-2 flex items-center justify-between">
+                ${scoreHtml}
             </div>
 
 
@@ -829,10 +984,47 @@
 
         `;
 
-        executionFeed.prepend(entry);
+        return entry;
+    }
 
-        // Spawn visual neural-network node
-        spawnTradeCircle(trade);
+
+    function addTradeToFeed(trade, options) {
+
+        const settings = options || {};
+
+        if (emptyFeed && emptyFeed.parentNode) {
+            emptyFeed.remove();
+        }
+
+        const card = buildTradeCard(trade);
+
+        if (settings.append) {
+            executionFeed.appendChild(card);
+        } else {
+            executionFeed.prepend(card);
+        }
+
+        // Only live trades spawn a canvas node; replaying history on
+        // load would flood the visualisation.
+        if (!settings.historical) {
+            spawnTradeCircle(trade);
+        }
+    }
+
+
+    function updateTradeCard(trade) {
+
+        const existing = executionFeed.querySelector(
+            `[data-trade-id="${trade.id}"]`
+        );
+
+        if (!existing) {
+            return false;
+        }
+
+        existing.replaceWith(buildTradeCard(trade));
+
+        return true;
     }
 
 
@@ -851,8 +1043,424 @@
 
 
     // ============================================================
+    // EQUITY CHART
+    //
+    // Rebuilt from stored snapshots. The rendered graph is never
+    // persisted - only the underlying points are.
+    // ============================================================
+
+    function drawEquityChart() {
+
+        if (!equityChart) {
+            return;
+        }
+
+        const dpr = window.devicePixelRatio || 1;
+
+        const width = equityChart.clientWidth || 300;
+        const height = 72;
+
+        equityChart.width = width * dpr;
+        equityChart.height = height * dpr;
+
+        const context = equityChart.getContext("2d");
+
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        context.clearRect(0, 0, width, height);
+
+        if (equitySeries.length < 2) {
+            equityRangeLabel.textContent =
+                equitySeries.length === 0
+                    ? "No history yet"
+                    : "Collecting data...";
+
+            equityPointCount.textContent = "";
+            return;
+        }
+
+        const values = equitySeries.map(point => point.equity);
+
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+
+        // Flat series would divide by zero; pad it instead.
+        const span = (max - min) || Math.max(1, Math.abs(max) * 0.001);
+
+        const padding = 4;
+        const usableHeight = height - padding * 2;
+
+        const pointAt = index => {
+
+            const x =
+                (index / (equitySeries.length - 1)) * width;
+
+            const y =
+                padding +
+                usableHeight -
+                ((values[index] - min) / span) * usableHeight;
+
+            return [x, y];
+        };
+
+        // Filled area
+        context.beginPath();
+        context.moveTo(0, height);
+
+        for (let i = 0; i < equitySeries.length; i++) {
+            const [x, y] = pointAt(i);
+            context.lineTo(x, y);
+        }
+
+        context.lineTo(width, height);
+        context.closePath();
+
+        const fill = context.createLinearGradient(0, 0, 0, height);
+
+        fill.addColorStop(0, "rgba(117, 224, 99, 0.22)");
+        fill.addColorStop(1, "rgba(117, 224, 99, 0)");
+
+        context.fillStyle = fill;
+        context.fill();
+
+        // Line
+        context.beginPath();
+
+        for (let i = 0; i < equitySeries.length; i++) {
+            const [x, y] = pointAt(i);
+
+            if (i === 0) {
+                context.moveTo(x, y);
+            } else {
+                context.lineTo(x, y);
+            }
+        }
+
+        context.strokeStyle = "#75E063";
+        context.lineWidth = 1.4;
+        context.stroke();
+
+        // Latest point marker
+        const [lastX, lastY] = pointAt(equitySeries.length - 1);
+
+        context.beginPath();
+        context.arc(lastX, lastY, 2.5, 0, Math.PI * 2);
+        context.fillStyle = "#75E063";
+        context.shadowColor = "#75E063";
+        context.shadowBlur = 8;
+        context.fill();
+        context.shadowBlur = 0;
+
+        const first = new Date(equitySeries[0].created_at);
+
+        equityRangeLabel.textContent =
+            `Since ${first.toLocaleDateString([], {
+                month: "short",
+                day: "numeric"
+            })} ${first.toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit"
+            })}`;
+
+        equityPointCount.textContent =
+            `${equitySeries.length} pts`;
+    }
+
+
+    // ============================================================
+    // AI DECISION PANEL (per symbol)
+    // ============================================================
+
+    function renderSymbolTabs() {
+
+        symbolTabs.innerHTML = "";
+
+        decisionsBySymbol.forEach(decision => {
+
+            const button = document.createElement("button");
+
+            const active = decision.symbol === selectedSymbol;
+
+            button.textContent = decision.symbol;
+
+            button.className = active
+                ? "rounded-lg border border-lime/30 bg-lime/10 px-2 py-1 text-[9px] uppercase tracking-widest text-lime"
+                : "rounded-lg border border-white/5 bg-white/[0.02] px-2 py-1 text-[9px] uppercase tracking-widest text-zinc-500 transition hover:border-lime/20";
+
+            button.onclick = () => {
+                selectedSymbol = decision.symbol;
+                renderDecisionPanel();
+            };
+
+            symbolTabs.appendChild(button);
+        });
+    }
+
+
+    function renderDecisionPanel() {
+
+        if (decisionsBySymbol.length === 0) {
+            return;
+        }
+
+        // Default to the most recently analysed symbol.
+        if (!selectedSymbol ||
+            !decisionsBySymbol.some(d => d.symbol === selectedSymbol)) {
+
+            selectedSymbol = decisionsBySymbol[0].symbol;
+        }
+
+        const decision =
+            decisionsBySymbol.find(d => d.symbol === selectedSymbol);
+
+        renderSymbolTabs();
+
+        logicEl.textContent =
+            decision.reasoning || "Waiting for market intelligence...";
+
+        const score = Number(decision.ai_score || 0);
+
+        confidenceEl.textContent = `${score}/100`;
+
+        confidenceBar.style.width =
+            `${Math.min(100, Math.max(0, score))}%`;
+
+        // Metadata chips
+        const chips = [];
+
+        const timestamp = new Date(decision.created_at);
+
+        chips.push(timestamp.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+        }));
+
+        if (decision.ai_signal) {
+            chips.push(`AI: ${decision.ai_signal}`);
+        }
+
+        if (decision.final_decision &&
+            decision.final_decision !== decision.ai_signal) {
+
+            chips.push(`ENGINE: ${decision.final_decision}`);
+        }
+
+        if (decision.market_regime) {
+            chips.push(decision.market_regime);
+        }
+
+        if (decision.setup) {
+            chips.push(decision.setup);
+        }
+
+        if (decision.status && decision.status !== "ok") {
+            chips.push(`STATUS: ${decision.status}`);
+        }
+
+        decisionMeta.innerHTML = chips
+            .map(chip =>
+                `<span class="rounded-md border border-white/5 bg-white/[0.02] px-1.5 py-0.5">
+                    ${escapeHtml(chip)}
+                </span>`
+            )
+            .join("");
+
+        // An override is never silent - it is shown here and logged
+        // server-side in the decisions table.
+        if (decision.override_reason) {
+            overrideNotice.textContent =
+                `Engine override: ${decision.override_reason}`;
+
+            overrideNotice.classList.remove("hidden");
+        } else {
+            overrideNotice.classList.add("hidden");
+        }
+    }
+
+
+    // ============================================================
+    // HISTORY LOAD (runs once, on page load)
+    // ============================================================
+
+    async function loadHistory() {
+
+        try {
+
+            const [tradesResponse, equityResponse] = await Promise.all([
+                fetch("/api/history/trades?limit=200", { cache: "no-store" }),
+                fetch("/api/history/equity?limit=500", { cache: "no-store" })
+            ]);
+
+            if (tradesResponse.ok) {
+
+                const payload = await tradesResponse.json();
+
+                // Newest first from the API; append in order so the
+                // newest ends up at the top of the feed.
+                payload.trades.forEach((row, index) => {
+
+                    const trade = normaliseTrade(row);
+
+                    knownTradeIds.add(trade.id);
+                    tradeSignatures.set(trade.id, tradeSignature(trade));
+
+                    lastTradeId = Math.max(lastTradeId, trade.id);
+
+                    addTradeToFeed(trade, {
+                        append: true,
+                        historical: true
+                    });
+
+                    // Repopulate the network visualisation from the
+                    // most recent trades so the canvas isn't blank
+                    // after a restart. Capped so history doesn't
+                    // flood it.
+                    if (index < 15) {
+                        spawnTradeCircle(trade);
+                    }
+                });
+            }
+
+            if (equityResponse.ok) {
+
+                const payload = await equityResponse.json();
+
+                equitySeries = payload.snapshots || [];
+
+                drawEquityChart();
+            }
+
+            await loadAnalytics();
+
+        } catch (error) {
+
+            console.error("History load failed:", error);
+        }
+
+        historyLoaded = true;
+    }
+
+
+    async function loadAnalytics() {
+
+        try {
+
+            const response = await fetch(
+                "/api/analytics",
+                { cache: "no-store" }
+            );
+
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = await response.json();
+
+            const metrics = payload.overall;
+
+            if (!metrics || metrics.total_trades === 0) {
+                realizedPnl.textContent = "P&L --";
+                return;
+            }
+
+            const sign = metrics.total_pnl > 0 ? "+" : "";
+
+            realizedPnl.textContent =
+                `P&L ${sign}${metrics.total_pnl.toFixed(2)} ` +
+                `(${metrics.total_trades}T)`;
+
+            realizedPnl.className =
+                metrics.total_pnl > 0
+                    ? "text-[10px] uppercase tracking-widest text-lime"
+                    : (metrics.total_pnl < 0
+                        ? "text-[10px] uppercase tracking-widest text-red-400"
+                        : "text-[10px] uppercase tracking-widest text-zinc-500");
+
+        } catch (error) {
+            console.error("Analytics load failed:", error);
+        }
+    }
+
+
+    function normaliseTrade(row) {
+
+        return {
+            id: row.id,
+            time: row.created_at,
+            asset: row.symbol,
+            signal: row.direction,
+            logic: row.reason || "",
+            status: row.execution_status,
+            pnl: row.pnl,
+            result: row.result,
+            score: row.ai_score
+        };
+    }
+
+
+    // ============================================================
+    // TRADE FEED REFRESH
+    //
+    // Re-reads the most recent trades so status changes
+    // (EXECUTED -> CLOSED, with P&L) appear without a reload.
+    // ============================================================
+
+    async function refreshTrades() {
+
+        const response = await fetch(
+            "/api/history/trades?limit=50",
+            { cache: "no-store" }
+        );
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+
+        const rows = (payload.trades || []).map(normaliseTrade);
+
+        // Oldest first, so prepending yields the correct order.
+        for (let i = rows.length - 1; i >= 0; i--) {
+
+            const trade = rows[i];
+
+            const signature = tradeSignature(trade);
+
+            if (knownTradeIds.has(trade.id)) {
+
+                // Only touch the DOM when something actually changed.
+                if (tradeSignatures.get(trade.id) !== signature) {
+
+                    if (updateTradeCard(trade)) {
+                        tradeSignatures.set(trade.id, signature);
+                    }
+                }
+
+                continue;
+            }
+
+            knownTradeIds.add(trade.id);
+            tradeSignatures.set(trade.id, signature);
+
+            lastTradeId = Math.max(lastTradeId, trade.id);
+
+            addTradeToFeed(trade);
+        }
+    }
+
+
+    function tradeSignature(trade) {
+        return `${trade.status}|${trade.pnl}|${trade.result}`;
+    }
+
+
+    // ============================================================
     // POLL BACKEND
     // ============================================================
+
+    let pollCount = 0;
+
 
     async function pollBackend() {
 
@@ -878,10 +1486,14 @@
             // Connection
             // ----------------------------------------------------
 
-            connectionStatus.textContent = "Connected";
+            const connected = state.mt5_connected !== false;
 
-            connectionStatus.className =
-                "rounded-full border border-lime/20 bg-lime/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-lime";
+            connectionStatus.textContent =
+                connected ? "Connected" : "No MT5";
+
+            connectionStatus.className = connected
+                ? "rounded-full border border-lime/20 bg-lime/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-lime"
+                : "rounded-full border border-amber-500/20 bg-amber-500/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-amber-400";
 
 
             // ----------------------------------------------------
@@ -902,26 +1514,28 @@
 
 
             // ----------------------------------------------------
-            // AI Logic
+            // AI decisions, per symbol
             // ----------------------------------------------------
 
-            logicEl.textContent =
-                state.last_logic ||
-                "Waiting for market intelligence...";
+            if (Array.isArray(state.decisions_by_symbol) &&
+                state.decisions_by_symbol.length > 0) {
 
+                decisionsBySymbol = state.decisions_by_symbol;
 
-            // ----------------------------------------------------
-            // Confidence
-            // ----------------------------------------------------
+                renderDecisionPanel();
 
-            const confidence =
-                Number(state.last_confidence || 0);
+            } else if (state.last_logic) {
 
-            confidenceEl.textContent =
-                `${confidence}%`;
+                // Fallback for an empty decisions table.
+                logicEl.textContent = state.last_logic;
 
-            confidenceBar.style.width =
-                `${Math.min(100, Math.max(0, confidence))}%`;
+                const score = Number(state.last_confidence || 0);
+
+                confidenceEl.textContent = `${score}/100`;
+
+                confidenceBar.style.width =
+                    `${Math.min(100, Math.max(0, score))}%`;
+            }
 
 
             // ----------------------------------------------------
@@ -932,35 +1546,51 @@
                 Boolean(state.is_running)
             );
 
+            // The interval survives a restart, so reflect the stored
+            // value in the selector on first poll.
+            if (pollCount === 0 && state.interval) {
+
+                const option = Array.from(intervalSelect.options)
+                    .find(o => Number(o.value) === Number(state.interval));
+
+                if (option) {
+                    intervalSelect.value = option.value;
+                }
+            }
+
 
             // ----------------------------------------------------
-            // Process new trades
+            // Trades
             // ----------------------------------------------------
 
-            const trades =
-                Array.isArray(state.trade_history)
-                    ? state.trade_history
-                    : [];
+            if (historyLoaded) {
+                await refreshTrades();
+            }
 
 
-            trades.forEach((trade, index) => {
+            // ----------------------------------------------------
+            // Equity curve + analytics, refreshed less often
+            // ----------------------------------------------------
 
-                /*
-                 * The backend currently doesn't assign a unique ID,
-                 * so we construct one from the trade properties.
-                 */
+            pollCount += 1;
 
-                const tradeId =
-                    `${trade.time}_${trade.asset}_${trade.signal}_${index}`;
+            if (pollCount % 10 === 0) {
 
-                if (!knownTrades.has(tradeId)) {
+                const equityResponse = await fetch(
+                    "/api/history/equity?limit=500",
+                    { cache: "no-store" }
+                );
 
-                    knownTrades.add(tradeId);
+                if (equityResponse.ok) {
+                    const payload = await equityResponse.json();
 
-                    addTradeToFeed(trade);
+                    equitySeries = payload.snapshots || [];
+
+                    drawEquityChart();
                 }
 
-            });
+                await loadAnalytics();
+            }
 
         } catch (error) {
 
@@ -1122,17 +1752,27 @@
 
     initializeCanvas();
 
-    // Poll immediately
-    pollBackend();
+    // Redraw the equity curve when the panel is resized.
+    window.addEventListener("resize", drawEquityChart);
 
-    // Poll every 3 seconds
-    setInterval(
-        pollBackend,
-        3000
-    );
+    /*
+     * Load persisted history FIRST, then start polling. The dashboard
+     * therefore opens with the full trade feed, equity curve and P&L
+     * already in place instead of starting from an empty screen.
+     */
+
+    loadHistory().then(() => {
+
+        pollBackend();
+
+        // Poll every 3 seconds
+        setInterval(
+            pollBackend,
+            3000
+        );
+    });
 
 </script>
 
 </body>
 </html>
-```

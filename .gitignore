@@ -4,3 +4,19 @@ __pycache__/
 .env
 *.log
 .env.*
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Local database (contains live trading history)
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
+# Ruflo/claude-flow local runtime state (binary, machine-specific)
+.swarm/
+ruvector.db
