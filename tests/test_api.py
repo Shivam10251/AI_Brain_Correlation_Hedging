@@ -44,8 +44,8 @@ def check(name, condition, detail=""):
 
 from fastapi.testclient import TestClient            # noqa: E402
 
-import main                                          # noqa: E402
-from database import repository as repo              # noqa: E402
+from backend import main                              # noqa: E402
+from backend.database import repository as repo       # noqa: E402
 
 
 print("\n=== API smoke test ===")
@@ -197,7 +197,7 @@ if FAILED:
 
 print("=" * 60)
 
-from database.connection import close_connection     # noqa: E402
+from backend.database.connection import close_connection     # noqa: E402
 
 close_connection()
 shutil.rmtree(TEMP_DIR, ignore_errors=True)

@@ -22,10 +22,10 @@ from datetime import datetime, timedelta, timezone
 
 import MetaTrader5 as mt5
 
-import config
-import memory
-from database import repository as repo
-from execution import comment_for
+from backend import config
+from backend.ai import memory
+from backend.database import repository as repo
+from backend.market.execution import comment_for
 
 
 DEAL_ENTRY_IN = 0

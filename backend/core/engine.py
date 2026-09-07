@@ -23,16 +23,16 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
-import config
-import news
-from ai_brain import get_ai_decision
-from data_engine import fetch_multi_timeframe_data
-from database import repository as repo
-from execution import execute_trade, new_client_order_id
+from backend import config
+from backend.ai.brain import get_ai_decision
+from backend.database import repository as repo
+from backend.market import news
+from backend.market.data_engine import fetch_multi_timeframe_data
+from backend.market.execution import execute_trade, new_client_order_id
 
 # Re-exported so `from engine import bot_state` and the existing
 # engine.<name> call sites keep working after the split.
-from runtime import (                               # noqa: F401
+from backend.core.runtime import (                  # noqa: F401
     acquire_engine_lock,
     bot_state,
     connect_mt5,
@@ -373,7 +373,7 @@ async def trading_loop():
             # Settle anything that closed since the last cycle. This is
             # what turns finished trades into P&L and experiences.
             try:
-                from reconciler import run_full_reconciliation
+                from backend.core.reconciler import run_full_reconciliation
 
                 await asyncio.to_thread(run_full_reconciliation)
             except Exception as error:              # noqa: BLE001

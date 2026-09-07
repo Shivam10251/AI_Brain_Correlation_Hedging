@@ -17,8 +17,8 @@ Rows are matched on symbol, market regime, setup, direction and
 volatility, then progressively broadened only if nothing matches.
 """
 
-import config
-from database import repository as repo
+from backend import config
+from backend.database import repository as repo
 
 
 # ---------------------------------------------------------------------

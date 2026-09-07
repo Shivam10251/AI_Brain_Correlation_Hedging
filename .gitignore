@@ -13,9 +13,9 @@ __pycache__/
 .claude-flow/sessions/
 
 # Local database (contains live trading history)
-database/*.db
-database/*.db-wal
-database/*.db-shm
+data/*.db
+data/*.db-wal
+data/*.db-shm
 
 # Ruflo/claude-flow local runtime state (binary, machine-specific)
 .swarm/

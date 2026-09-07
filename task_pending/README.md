@@ -13,6 +13,61 @@ something earlier being skipped.
 
 ---
 
+## Where everything lives
+
+```
+backend/
+  main.py              FastAPI app, lifespan recovery, all endpoints
+  config.py            every setting, loaded from .env
+  core/
+    engine.py          the per-cycle pipeline and risk gate
+    runtime.py         shared state, MT5 connection, engine lock, recovery
+    reconciler.py      database <-> MT5 reconciliation (3 passes)
+  ai/
+    brain.py           the DeepSeek call, validation, safe-HOLD paths
+    prompts.py         prompt construction
+    memory.py          experience retrieval and distillation
+  market/
+    data_engine.py     MT5 candles, account snapshot, derived features
+    execution.py       order placement, idempotent client order ids
+    news.py            news extension point (no-op by default)
+  database/
+    schema.sql         the 7 tables
+    connection.py      path resolution, WAL, per-thread connections
+    repository.py      public data-access surface (a façade)
+    repo_trading.py      decisions + trades
+    repo_context.py      equity, market state, experiences, events
+    _common.py           shared insert/update helpers
+    analytics.py       P&L, win rate, profit factor, drawdown, streaks
+
+frontend/
+  templates/index.html the dashboard
+
+data/
+  quantbot.db          created at runtime, gitignored
+
+tests/
+  fake_mt5.py                stand-in for the Windows-only MT5 package
+  test_restart_recovery.py   48 checks
+  test_api.py                31 checks
+
+task_pending/          this file
+```
+
+**Two path notes from the restructure:**
+
+- The database moved from `database/quantbot.db` to **`data/quantbot.db`**.
+  Code lives in `backend/`, data lives in `data/`, so redeploying code
+  can never touch live trading history. If you already have a database
+  at the old path, just move the file — or point `DB_PATH` at it.
+- The run command changed to **`uvicorn backend.main:app`**. `run.txt`
+  is already updated.
+
+Template and database paths resolve from `__file__`, not the working
+directory, so the app runs the same from anywhere.
+
+---
+
 ## BLOCKER 1 — Set the DeepSeek API key
 
 **Until this is done the bot will not trade at all.** Every AI call
@@ -21,7 +76,7 @@ configured`, which you will see in the dashboard.
 
 ### Why this was broken
 
-`config.py` line 21 previously read:
+`backend/config.py` previously read:
 
 ```python
 DEEPSEEK_API_KEY = "API_KEY"
@@ -58,7 +113,7 @@ Both work. `DEEPSEEK_API_KEY` wins if both are present.
 **Verify it:**
 
 ```
-python -c "import config; print('KEY OK' if config.DEEPSEEK_API_KEY and config.DEEPSEEK_API_KEY != 'API_KEY' else 'STILL BROKEN')"
+python -c "from backend import config; print('KEY OK' if config.DEEPSEEK_API_KEY and config.DEEPSEEK_API_KEY != 'API_KEY' else 'STILL BROKEN')"
 ```
 
 Do not commit `.env`. It is already in `.gitignore`.
@@ -95,7 +150,7 @@ is a genuine risk (see Risk A).
 Start the bot:
 
 ```
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Do NOT use `--reload` while trading. The engine lock will stop a second
@@ -105,7 +160,7 @@ Then walk this list and tick each one:
 
 - [ ] **1. Start** — console prints `Database ready:`, `State restored:`,
       `MT5 initialized successfully.` and `AI Hedge Fund trading loop started.`
-- [ ] **2. Confirm the database file appeared** at `database/quantbot.db`
+- [ ] **2. Confirm the database file appeared** at `data/quantbot.db`
 - [ ] **3. Click "Initialize Engine"**, let it run several cycles
 - [ ] **4. Confirm AI decisions appear** — the per-symbol tabs under
       "AI Signal Score" should light up, one per symbol in `config.SYMBOLS`
@@ -133,8 +188,8 @@ Then walk this list and tick each one:
 Quick way to inspect the database at any point:
 
 ```
-sqlite3 database\quantbot.db "SELECT id,symbol,direction,execution_status,pnl,result FROM trades ORDER BY id DESC LIMIT 10;"
-sqlite3 database\quantbot.db "SELECT COUNT(*) FROM experiences;"
+sqlite3 data\quantbot.db "SELECT id,symbol,direction,execution_status,pnl,result FROM trades ORDER BY id DESC LIMIT 10;"
+sqlite3 data\quantbot.db "SELECT COUNT(*) FROM experiences;"
 ```
 
 ---
@@ -145,7 +200,7 @@ sqlite3 database\quantbot.db "SELECT COUNT(*) FROM experiences;"
 
 In MT5, `result.order` is an **order** ticket. Positions are keyed by
 **position id**. On many brokers they are the same number; on some they
-are not. `execution.py::_resolve_position_ticket()` handles this by
+are not. `backend/market/execution.py::_resolve_position_ticket()` handles this by
 looking up the deal and reading `deal.position_id`, falling back to
 `result.order`:
 
@@ -169,7 +224,7 @@ EXECUTED forever. No P&L, no experiences, no analytics.
 **How to check:** after one trade executes, run
 
 ```
-sqlite3 database\quantbot.db "SELECT id,order_ticket,deal_ticket,position_ticket FROM trades ORDER BY id DESC LIMIT 1;"
+sqlite3 data\quantbot.db "SELECT id,order_ticket,deal_ticket,position_ticket FROM trades ORDER BY id DESC LIMIT 1;"
 ```
 
 and compare `position_ticket` against the position ticket shown in the
@@ -218,7 +273,7 @@ is written, and an amber banner appears in the dashboard.
 
 ## DECISION 3 — Interval
 
-`config.DEFAULT_INTERVAL` is 30 seconds, and the dashboard dropdown
+`backend/config.py`'s `DEFAULT_INTERVAL` is 30 seconds, and the dashboard dropdown
 offers only 30s and 1hr. A DeepSeek call per symbol per cycle at 30s is
 4 API calls every 30 seconds — roughly 11,500 calls/day. Check what
 that costs you before running it unattended.
@@ -238,12 +293,12 @@ the app behaves. Read them and push back if you disagree.
    Reason: the dashboard must be able to serve history when the MT5
    terminal is closed. The header shows "No MT5" in amber.
 
-2. **`ai_brain.get_ai_decision()` never raises.** Every failure path —
+2. **`backend/ai/brain.py::get_ai_decision()` never raises.** Every failure path —
    timeout, HTTP error, malformed JSON, out-of-range score — returns a
    dict with `signal: "HOLD"` and a non-`ok` status. An invalid AI
    response can no longer reach the execution path.
 
-3. **`execution.execute_trade()` no longer raises on rejection.** It
+3. **`backend/market/execution.py::execute_trade()` no longer raises on rejection.** It
    returns a structured dict. Rejections are now persisted with the
    retcode and reason. Previously they raised, got swallowed by the
    generic `except` in the loop, and vanished entirely.
@@ -251,7 +306,7 @@ the app behaves. Read them and push back if you disagree.
 4. **`@app.on_event` replaced with `lifespan`.** The old decorator is
    deprecated in current FastAPI.
 
-5. **The stray markdown fences are gone.** `templates/index.html`
+5. **The stray markdown fences are gone.** `frontend/templates/index.html`
    literally began with ` ```html ` and ended with ` ``` `, which the
    browser rendered as visible text.
 
@@ -259,13 +314,13 @@ the app behaves. Read them and push back if you disagree.
 
 ## LATER — News integration (Phase 11 scaffolding is ready)
 
-`news.py` is the single extension point. Nothing fetches news yet; the
+`backend/market/news.py` is the single extension point. Nothing fetches news yet; the
 default provider returns `None`, so prompts and database rows look
 exactly as they did before news existed.
 
 To add a real provider:
 
-1. Subclass `NewsProvider` in `news.py`, implement
+1. Subclass `NewsProvider` in `backend/market/news.py`, implement
    `get_context(symbol, features)`.
 2. Register it in the `PROVIDERS` dict.
 3. Set `NEWS_ENABLED=true` and `NEWS_PROVIDER=<your key>` in `.env`.
@@ -286,7 +341,7 @@ No other file needs to change. The returned dict is stored in
   If bucket 80-100 genuinely wins more often than 40-59, you can start
   calling it a probability. Not before.
 
-- **Do not trust the metrics early.** `analytics.compute_metrics()`
+- **Do not trust the metrics early.** `backend/database/analytics.py`
   returns a `sample_note` that says "Not a statistically meaningful
   sample" below 30 closed trades. Believe it. Win rate over 5 trades
   tells you nothing.
@@ -347,5 +402,5 @@ MEMORY_MAX_EXPERIENCES=5
 NEWS_ENABLED=false
 NEWS_PROVIDER=null
 
-# DB_PATH=C:\path\to\quantbot.db   # defaults to database/quantbot.db
+# DB_PATH=C:\path\to\quantbot.db   # defaults to data/quantbot.db
 ```

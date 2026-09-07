@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
 
-import config
-from database import repository as repo
+from backend import config
+from backend.database import repository as repo
 
 
 # =====================================================================

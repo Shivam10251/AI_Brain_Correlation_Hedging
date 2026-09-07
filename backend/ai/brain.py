@@ -19,10 +19,10 @@ import time
 
 import requests
 
-import config
-import memory
-import news
-from prompts import build_system_prompt, build_user_prompt
+from backend import config
+from backend.ai import memory
+from backend.ai.prompts import build_system_prompt, build_user_prompt
+from backend.market import news
 
 
 VALID_SIGNALS = {"BUY", "SELL", "HOLD"}

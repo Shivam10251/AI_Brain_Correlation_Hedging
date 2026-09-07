@@ -105,9 +105,14 @@ def boot():
     """
 
     for name in [
-        "config", "database", "database.connection", "database.repository",
-        "database.analytics", "memory", "news", "ai_brain", "data_engine",
-        "execution", "reconciler", "engine",
+        "backend", "backend.config",
+        "backend.database", "backend.database.connection",
+        "backend.database.repository", "backend.database.analytics",
+        "backend.ai", "backend.ai.brain", "backend.ai.memory",
+        "backend.market", "backend.market.news",
+        "backend.market.data_engine", "backend.market.execution",
+        "backend.core", "backend.core.engine", "backend.core.runtime",
+        "backend.core.reconciler",
     ]:
         sys.modules.pop(name, None)
 
@@ -115,9 +120,9 @@ def boot():
 
     requests.post = fake_post
 
-    import engine as engine_module
+    from backend.core import engine as engine_module
 
-    from database import initialize_database
+    from backend.database import initialize_database
 
     initialize_database()
 
@@ -130,7 +135,8 @@ def run_cycle(engine_module, symbols=None):
     """Run one full cycle synchronously."""
 
     import asyncio
-    import config as config_module
+
+    from backend import config as config_module
 
     async def cycle():
         for symbol in (symbols or config_module.SYMBOLS):
@@ -149,7 +155,7 @@ engine = boot()
 
 check("database initialises", os.path.exists(os.environ["DB_PATH"]))
 
-from database import repository as repo   # noqa: E402
+from backend.database import repository as repo   # noqa: E402
 
 # One BUY, then a HOLD.
 SIGNAL_SCRIPT.extend([
@@ -264,13 +270,13 @@ decisions_before = len(repo.get_decisions(limit=500))
 trades_before = len(repo.get_trades(limit=500))
 equity_before = len(repo.get_equity_snapshots(limit=500))
 
-from database.connection import close_connection   # noqa: E402
+from backend.database.connection import close_connection   # noqa: E402
 
 close_connection()
 
 engine = boot()
 
-from database import repository as repo   # noqa: E402
+from backend.database import repository as repo   # noqa: E402
 
 restored = engine.restore_state()
 
@@ -307,7 +313,7 @@ check(
 
 print("\n=== Reconciliation with live MT5 state ===")
 
-from reconciler import run_full_reconciliation   # noqa: E402
+from backend.core.reconciler import run_full_reconciliation   # noqa: E402
 
 summary = run_full_reconciliation()
 
@@ -368,7 +374,7 @@ check(
 
 print("\n=== AI memory retrieval ===")
 
-import memory as memory_module   # noqa: E402
+from backend.ai import memory as memory_module   # noqa: E402
 
 retrieved = memory_module.retrieve_relevant(
     "EURUSDm", {"market_regime": "trending", "volatility_bucket": "normal"}
@@ -392,7 +398,7 @@ check(
 
 print("\n=== Crash recovery: orphaned PENDING order ===")
 
-from execution import comment_for, new_client_order_id   # noqa: E402
+from backend.market.execution import comment_for, new_client_order_id   # noqa: E402
 
 orphan_id = new_client_order_id()
 
@@ -536,7 +542,7 @@ check(
 
 print("\n=== Analytics ===")
 
-from database import analytics   # noqa: E402
+from backend.database import analytics   # noqa: E402
 
 metrics = analytics.compute_metrics()
 

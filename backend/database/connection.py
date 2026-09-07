@@ -18,7 +18,13 @@ from pathlib import Path
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
-DEFAULT_DB_PATH = _PACKAGE_DIR / "quantbot.db"
+# backend/database -> backend -> project root
+PROJECT_ROOT = _PACKAGE_DIR.parent.parent
+
+# Source code lives in backend/, data lives in data/. Keeping the
+# database out of the package means a redeploy of the code never risks
+# touching live trading history.
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "quantbot.db"
 
 SCHEMA_PATH = _PACKAGE_DIR / "schema.sql"
 

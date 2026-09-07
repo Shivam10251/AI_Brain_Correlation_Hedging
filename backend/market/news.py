@@ -17,7 +17,7 @@ contains a "summary" string, injected into the DeepSeek prompt. The
 and experiences so analytics can slice by it later.
 """
 
-import config
+from backend import config
 
 
 class NewsProvider:

@@ -13,6 +13,7 @@ browser refresh therefore cannot duplicate an MT5 order.
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
 from fastapi.templating import Jinja2Templates
@@ -20,14 +21,18 @@ from pydantic import BaseModel
 
 import MetaTrader5 as mt5
 
-import config
-import engine
-from database import analytics, initialize_database
-from database import repository as repo
-from engine import bot_state
+from backend import config
+from backend.core import engine
+from backend.core.engine import bot_state
+from backend.database import analytics, initialize_database
+from backend.database import repository as repo
 
 
-templates = Jinja2Templates(directory="templates")
+# Resolved from this file rather than the working directory, so the app
+# runs the same however uvicorn is invoked.
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+templates = Jinja2Templates(directory=str(FRONTEND_DIR / "templates"))
 
 
 # ============================================================
@@ -71,7 +76,7 @@ async def lifespan(app: FastAPI):
     # 4. Reconcile
     if bot_state["mt5_connected"]:
         try:
-            from reconciler import run_full_reconciliation
+            from backend.core.reconciler import run_full_reconciliation
 
             summary = await asyncio.to_thread(run_full_reconciliation)
 

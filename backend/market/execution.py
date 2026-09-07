@@ -19,8 +19,8 @@ import uuid
 
 import MetaTrader5 as mt5
 
-import config
-from config import SL_PERCENT, TP_PERCENT
+from backend import config
+from backend.config import SL_PERCENT, TP_PERCENT
 
 
 # MT5 truncates order comments (31 chars on most builds), so the tag is
