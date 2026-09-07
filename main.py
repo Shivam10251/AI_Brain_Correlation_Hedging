@@ -1,7 +1,10 @@
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
+
+
 from pydantic import BaseModel
 
 import MetaTrader5 as mt5
@@ -17,6 +20,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+templates = Jinja2Templates(directory="templates")
 
 # ============================================================
 # BOT STATE
@@ -44,6 +48,16 @@ class ControlRequest(BaseModel):
 # ============================================================
 # API: CONTROL BOT
 # ============================================================
+
+@app.get("/")
+async def home(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"request": request}
+    )
+
+
 
 @app.post("/api/control")
 async def control_bot(request: ControlRequest):

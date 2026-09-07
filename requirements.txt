@@ -1,1 +1,7 @@
 python-dotenv==1.2.3
+fastapi
+uvicorn[standard]
+MetaTrader5
+pandas
+requests
+Jinja2

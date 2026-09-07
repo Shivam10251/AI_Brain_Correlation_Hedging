@@ -5,19 +5,9 @@ from config import SL_PERCENT, TP_PERCENT
 
 def execute_trade(symbol, signal):
     """
-    Execute a market trade on MetaTrader 5.
-
-    Args:
-        symbol (str): Trading symbol, e.g. "EURUSDm"
-        signal (str): "BUY", "SELL", or "HOLD"
-
-    Returns:
-        MT5 order result object.
+    Execute a market trade through MetaTrader 5.
     """
 
-    # ---------------------------------------------------------
-    # 1. Validate signal
-    # ---------------------------------------------------------
     signal = signal.upper()
 
     if signal == "HOLD":
@@ -27,74 +17,87 @@ def execute_trade(symbol, signal):
         }
 
     if signal not in {"BUY", "SELL"}:
-        raise ValueError(
-            f"Invalid trading signal: {signal}"
-        )
+        raise ValueError(f"Invalid signal: {signal}")
 
     # ---------------------------------------------------------
-    # 2. Get symbol information
+    # Symbol information
     # ---------------------------------------------------------
+
     symbol_info = mt5.symbol_info(symbol)
 
     if symbol_info is None:
         raise RuntimeError(
-            f"Could not retrieve symbol information for {symbol}"
+            f"Symbol not found: {symbol} | {mt5.last_error()}"
         )
 
-    # Make sure the symbol is visible in Market Watch
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
             raise RuntimeError(
-                f"Could not select symbol {symbol}"
+                f"Could not select symbol: {symbol}"
             )
 
         symbol_info = mt5.symbol_info(symbol)
 
     # ---------------------------------------------------------
-    # 3. Get current market price
+    # Current price
     # ---------------------------------------------------------
+
     tick = mt5.symbol_info_tick(symbol)
 
     if tick is None:
         raise RuntimeError(
-            f"Could not retrieve tick data for {symbol}"
+            f"No tick data for {symbol} | {mt5.last_error()}"
         )
 
     # ---------------------------------------------------------
-    # 4. Determine order type and entry price
+    # Price / SL / TP
     # ---------------------------------------------------------
+
     if signal == "BUY":
+
         order_type = mt5.ORDER_TYPE_BUY
         price = tick.ask
 
-        # BUY:
-        # SL below entry
-        # TP above entry
         sl = price * (1 - SL_PERCENT)
         tp = price * (1 + TP_PERCENT)
 
-    else:  # SELL
+    else:
+
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
 
-        # SELL:
-        # SL above entry
-        # TP below entry
         sl = price * (1 + SL_PERCENT)
         tp = price * (1 - TP_PERCENT)
 
     # ---------------------------------------------------------
-    # 5. CRITICAL: Round SL and TP using symbol digits
+    # CRITICAL: use broker's digits
     # ---------------------------------------------------------
+
     digits = symbol_info.digits
 
+    price = round(price, digits)
     sl = round(sl, digits)
     tp = round(tp, digits)
-    price = round(price, digits)
 
     # ---------------------------------------------------------
-    # 6. Build MT5 trade request
+    # Print what we're attempting
     # ---------------------------------------------------------
+
+    print("\n========================================")
+    print("ATTEMPTING MT5 TRADE")
+    print("Symbol:", symbol)
+    print("Signal:", signal)
+    print("Price:", price)
+    print("SL:", sl)
+    print("TP:", tp)
+    print("Digits:", digits)
+    print("Volume:", 0.01)
+    print("========================================")
+
+    # ---------------------------------------------------------
+    # Trade request
+    # ---------------------------------------------------------
+
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
@@ -107,20 +110,53 @@ def execute_trade(symbol, signal):
         "magic": 100001,
         "comment": "AI Hedge Fund Bot",
         "type_time": mt5.ORDER_TIME_GTC,
+
+        # Let MT5 use the symbol's supported filling mode
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
     # ---------------------------------------------------------
-    # 7. Send trade
+    # Send order
     # ---------------------------------------------------------
+
     result = mt5.order_send(request)
 
     if result is None:
+
         raise RuntimeError(
-            f"MT5 order_send() failed: {mt5.last_error()}"
+            f"order_send returned None | "
+            f"MT5 error: {mt5.last_error()}"
         )
 
     # ---------------------------------------------------------
-    # 8. Return MT5 result
+    # ALWAYS inspect the MT5 result
     # ---------------------------------------------------------
+
+    print("\n========================================")
+    print("MT5 ORDER RESULT")
+    print("Retcode:", result.retcode)
+    print("Comment:", result.comment)
+    print("Order:", result.order)
+    print("Deal:", result.deal)
+    print("Volume:", result.volume)
+    print("Price:", result.price)
+    print("========================================\n")
+
+    # ---------------------------------------------------------
+    # Successful market execution
+    # ---------------------------------------------------------
+
+    successful_codes = {
+        mt5.TRADE_RETCODE_DONE,
+        mt5.TRADE_RETCODE_DONE_PARTIAL,
+    }
+
+    if result.retcode not in successful_codes:
+
+        raise RuntimeError(
+            f"MT5 REJECTED TRADE | "
+            f"retcode={result.retcode} | "
+            f"comment={result.comment}"
+        )
+
     return result
