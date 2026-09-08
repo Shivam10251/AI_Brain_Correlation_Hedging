@@ -345,6 +345,29 @@ async def execute_and_record(symbol, signal, decision, market_data):
 # MAIN LOOP
 # =====================================================================
 
+async def wait_for_next_cycle():
+    """
+    Wait one interval, in one-second slices.
+
+    A single asyncio.sleep(interval) reads bot_state["interval"] once,
+    when the sleep starts, and cannot be shortened afterwards - so
+    lowering the interval from 3600s to 30s on the dashboard had no
+    effect until the original hour elapsed. Re-reading the value each
+    second means a change (or a stop) is picked up within a second.
+    """
+
+    waited = 0
+
+    while waited < bot_state["interval"]:
+
+        if not bot_state["is_running"]:
+            return
+
+        await asyncio.sleep(1)
+
+        waited += 1
+
+
 async def trading_loop():
     """
     Main AI trading loop.
@@ -367,7 +390,7 @@ async def trading_loop():
                     category="MT5",
                 )
 
-                await asyncio.sleep(bot_state["interval"])
+                await wait_for_next_cycle()
                 continue
 
             # Settle anything that closed since the last cycle. This is
@@ -407,7 +430,7 @@ async def trading_loop():
             # --------------------------------------------------------
             # Wait before next complete cycle
             # --------------------------------------------------------
-            await asyncio.sleep(bot_state["interval"])
+            await wait_for_next_cycle()
 
         else:
             # Bot is stopped, don't burn CPU

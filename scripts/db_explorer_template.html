@@ -1,0 +1,483 @@
+<title>Quantbot Data Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF1F4; --surface-3:#E4EAEF;
+  --line:#DCE3E9; --line-strong:#BFCBD4;
+  --ink:#101619; --ink-2:#4C5A63; --ink-3:#7B8892;
+  --accent:#0B6E8F; --accent-soft:#E0EFF6; --accent-line:#9CCADC; --on-accent:#FFFFFF;
+  --good:#17693F; --good-soft:#E1F2E8;
+  --warn:#8A5A08; --warn-soft:#FAEDD8;
+  --crit:#A62B23; --crit-soft:#FAE5E3;
+  --shadow:0 1px 2px rgba(16,22,25,.06),0 8px 24px -12px rgba(16,22,25,.18);
+  --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E1418; --surface:#151D22; --surface-2:#1C262C; --surface-3:#243036;
+    --line:#263239; --line-strong:#3B4A52;
+    --ink:#E7EEF2; --ink-2:#A2B1BB; --ink-3:#77868F;
+    --accent:#4CC3E8; --accent-soft:#0F323E; --accent-line:#22596E; --on-accent:#0E1418;
+    --good:#6ED79B; --good-soft:#122B1F;
+    --warn:#E8B057; --warn-soft:#332711;
+    --crit:#F09086; --crit-soft:#3A1D1A;
+    --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E1418; --surface:#151D22; --surface-2:#1C262C; --surface-3:#243036;
+  --line:#263239; --line-strong:#3B4A52;
+  --ink:#E7EEF2; --ink-2:#A2B1BB; --ink-3:#77868F;
+  --accent:#4CC3E8; --accent-soft:#0F323E; --accent-line:#22596E; --on-accent:#0E1418;
+  --good:#6ED79B; --good-soft:#122B1F;
+  --warn:#E8B057; --warn-soft:#332711;
+  --crit:#F09086; --crit-soft:#3A1D1A;
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 10px 28px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--cond);font-weight:600;margin:0;text-wrap:balance;letter-spacing:.01em}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+.wrap{max-width:1500px;margin:0 auto;padding:20px 20px 64px}
+
+/* ---------- identity strip ---------- */
+.ident{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px 28px;padding:0 0 16px;border-bottom:1px solid var(--line)}
+.ident h1{font-size:25px;line-height:1.15}
+.ident .path{font-family:var(--mono);font-size:12px;color:var(--ink-2);margin-top:3px}
+.ident .path b{color:var(--ink);font-weight:500}
+.facts{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.fact{font-family:var(--mono);font-size:11px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line);padding:3px 8px;border-radius:4px;white-space:nowrap}
+.fact b{color:var(--ink);font-weight:500}
+
+.snapnote{display:flex;gap:9px;align-items:flex-start;margin-top:14px;padding:9px 12px;background:var(--warn-soft);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:5px;font-size:12.5px;color:var(--ink-2)}
+.snapnote b{color:var(--ink);font-weight:600}
+.snapnote code{font-family:var(--mono);font-size:11.5px}
+
+/* ---------- stat tiles ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:7px;overflow:hidden;margin:16px 0 18px}
+.tile{background:var(--surface);padding:11px 14px 12px;display:flex;flex-direction:column;gap:2px}
+.tile .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.tile .v{font-family:var(--mono);font-size:21px;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.25}
+.tile .s{font-size:11.5px;color:var(--ink-2)}
+.tile .v.alert{color:var(--crit)}
+
+/* ---------- layout ---------- */
+.cols{display:grid;grid-template-columns:236px minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr}}
+
+/* ---------- rail ---------- */
+.rail{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;position:sticky;top:16px}
+@media (max-width:900px){.rail{position:static}}
+.rail-h{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:10px 13px 8px;border-bottom:1px solid var(--line)}
+.tbtn{display:flex;align-items:baseline;gap:8px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:9px 13px;cursor:pointer;color:var(--ink);font-family:var(--mono);font-size:12.5px}
+.tbtn:last-child{border-bottom:0}
+.tbtn:hover{background:var(--surface-2)}
+.tbtn[aria-current="true"]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.tbtn .n{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink-2);font-size:11.5px}
+.tbtn[aria-current="true"] .n{color:var(--ink)}
+.tbtn.empty .name,.tbtn.empty .n{color:var(--ink-3)}
+
+/* ---------- panel ---------- */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
+.panel-h{padding:13px 15px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-start}
+.panel-h h2{font-family:var(--mono);font-size:15px;font-weight:600}
+.panel-h .desc{font-size:12.5px;color:var(--ink-2);max-width:62ch;margin-top:2px}
+.tools{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
+input[type=search]{font-family:var(--mono);font-size:12px;padding:5px 9px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface-2);color:var(--ink);width:172px}
+input[type=search]::placeholder{color:var(--ink-3)}
+.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2);cursor:pointer;white-space:nowrap;user-select:none}
+.chk input{accent-color:var(--accent);cursor:pointer;margin:0}
+
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-family:var(--mono);font-weight:500;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);padding:7px 11px;border-bottom:1px solid var(--line-strong);white-space:nowrap;z-index:1}
+thead th .ty{color:var(--ink-3);font-size:9.5px;letter-spacing:.03em;margin-left:5px;text-transform:none}
+tbody tr{border-bottom:1px solid var(--line);cursor:pointer}
+tbody tr:hover{background:var(--surface-2)}
+tbody tr[aria-selected="true"]{background:var(--accent-soft)}
+td{padding:6px 11px;white-space:nowrap;max-width:330px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+td.num,td.id{font-family:var(--mono);font-variant-numeric:tabular-nums}
+td.id{color:var(--ink-2)}
+td.nul{color:var(--ink-3);font-family:var(--mono);font-size:11px}
+td.txt{max-width:380px;color:var(--ink-2)}
+td.mono{font-family:var(--mono);font-size:11.5px}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:500;letter-spacing:.04em;padding:1.5px 7px;border-radius:11px;border:1px solid transparent;white-space:nowrap}
+.p-good{background:var(--good-soft);color:var(--good);border-color:var(--good)}
+.p-warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.p-crit{background:var(--crit-soft);color:var(--crit);border-color:var(--crit)}
+.p-neut{background:var(--surface-3);color:var(--ink-2);border-color:var(--line-strong)}
+
+.meter{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.meter .bar{width:52px;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;flex:none}
+.meter .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+
+.empty{padding:44px 22px;text-align:center;color:var(--ink-2)}
+.empty .big{font-family:var(--cond);font-size:17px;color:var(--ink);margin-bottom:5px}
+.empty p{margin:0 auto;max-width:52ch;font-size:13px}
+.empty code{font-family:var(--mono)}
+.foot{padding:8px 15px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--ink-3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+
+/* ---------- pager ---------- */
+.pager{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.pg{font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums;min-width:26px;height:26px;padding:0 7px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink-2);border-radius:5px;cursor:pointer}
+.pg:hover:not(:disabled){background:var(--surface-2);color:var(--ink)}
+.pg:disabled{opacity:.4;cursor:default}
+.pg[aria-current="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.pg.gap{border:0;background:none;cursor:default;color:var(--ink-3);min-width:14px;padding:0}
+
+/* ---------- drawer ---------- */
+.scrim{position:fixed;inset:0;background:rgba(10,15,18,.45);z-index:40;border:0;width:100%;padding:0;cursor:pointer}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--surface);border-left:1px solid var(--line-strong);box-shadow:var(--shadow);z-index:41;display:flex;flex-direction:column}
+.drawer-h{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+.drawer-h h3{font-family:var(--mono);font-size:13.5px}
+.drawer-h .sub{font-size:11.5px;color:var(--ink-2);font-family:var(--mono)}
+.x{margin-left:auto;background:var(--surface-2);border:1px solid var(--line-strong);color:var(--ink-2);border-radius:5px;width:26px;height:26px;cursor:pointer;font-size:15px;line-height:1;flex:none}
+.x:hover{color:var(--ink);background:var(--surface-3)}
+.drawer-b{overflow-y:auto;padding:4px 0 24px}
+.fld{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;padding:7px 16px;border-bottom:1px solid var(--line);align-items:start}
+.fld:hover{background:var(--surface-2)}
+.fld .fk{font-family:var(--mono);font-size:11px;color:var(--ink-2);word-break:break-word}
+.fld .fk em{display:block;color:var(--ink-3);font-style:normal;font-size:9.5px;letter-spacing:.03em}
+.fld .fv{font-size:12.5px;word-break:break-word;min-width:0}
+.fld .fv.m{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.fld .fv.nul{color:var(--ink-3);font-family:var(--mono);font-size:11px}
+pre{margin:0;font-family:var(--mono);font-size:11px;line-height:1.5;background:var(--surface-2);border:1px solid var(--line);border-radius:5px;padding:9px 10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);max-height:280px;overflow-y:auto}
+.prose{white-space:pre-wrap;color:var(--ink-2);font-size:12.5px}
+.hide{display:none}
+</style>
+
+<div class="wrap">
+  <header class="ident">
+    <div>
+      <h1>Quantbot Data Explorer</h1>
+      <div class="path">SQLite &middot; <b id="m-path"></b></div>
+    </div>
+    <div class="facts">
+      <span class="fact"><b id="m-size"></b> on disk</span>
+      <span class="fact">journal <b id="m-journal"></b></span>
+      <span class="fact">SQLite <b id="m-sqlite"></b></span>
+      <span class="fact">snapshot <b id="m-when"></b></span>
+    </div>
+  </header>
+
+  <div class="snapnote">
+    <span aria-hidden="true">&#9679;</span>
+    <span><b>Point-in-time snapshot,</b> copied out of <code>data/quantbot.db</code> at the time shown above. It does not update as the bot trades &mdash; re-export to refresh it. Live state stays on the running dashboard at <code>127.0.0.1:8000</code>.</span>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="cols">
+    <nav class="rail" aria-label="Tables">
+      <div class="rail-h">Tables &middot; <span id="tblcount"></span></div>
+      <div id="rail"></div>
+    </nav>
+
+    <section class="panel">
+      <div class="panel-h">
+        <div style="min-width:0">
+          <h2 id="t-name"></h2>
+          <div class="desc" id="t-desc"></div>
+        </div>
+        <div class="tools">
+          <label class="chk"><input type="checkbox" id="hide-empty" checked> Hide all-null columns</label>
+          <input type="search" id="q" placeholder="filter rows&hellip;" aria-label="Filter rows">
+        </div>
+      </div>
+      <div class="scroll" id="scroll"></div>
+      <div class="foot">
+        <span id="f-left"></span>
+        <nav class="pager" id="pager" aria-label="Pagination"></nav>
+      </div>
+    </section>
+  </div>
+</div>
+
+<button class="scrim hide" id="scrim" aria-label="Close inspector"></button>
+<aside class="drawer hide" id="drawer" role="dialog" aria-modal="true" aria-label="Row inspector">
+  <div class="drawer-h">
+    <div>
+      <h3 id="d-title"></h3>
+      <div class="sub" id="d-sub"></div>
+    </div>
+    <button class="x" id="d-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-b" id="d-body"></div>
+</aside>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+(function(){
+"use strict";
+var DB = JSON.parse(document.getElementById("payload").textContent);
+var T = DB.tables, COLS = DB.schema, META = DB.meta;
+
+/* Table descriptions are the schema's own design notes, kept verbatim. */
+var DESC = {
+  decisions:"One row per DeepSeek analysis, valid or not. Keeps the structured output, the natural-language reasoning verbatim, and the raw response for provenance.",
+  trades:"One row per execution attempt, including rejections. client_order_id is generated before the order is sent and is unique — that is what makes execution idempotent across a crash or restart.",
+  equity_snapshots:"Raw points for the equity curve. No chart is stored; the dashboard reconstructs the curve from these rows.",
+  market_states:"Derived features per symbol per cycle. Candles are deliberately not stored — MT5 already has them — only the computed features the AI actually reasoned over.",
+  experiences:"Distilled outcome of a finished trade. These are what get retrieved and fed back into the next prompt.",
+  events:"Durable execution feed and audit log.",
+  engine_state:"Small durable key/value store: run state, cycle interval, and the single-writer engine lock."
+};
+var ORDER = ["decisions","trades","events","market_states","equity_snapshots","experiences","engine_state"];
+var names = ORDER.filter(function(n){return T[n];})
+  .concat(Object.keys(T).filter(function(n){return ORDER.indexOf(n)<0;}));
+
+var JSONISH = ["features_json","news_json","context_json","data_json","raw_response","raw_result","experience_ids","value"];
+var PROSE = ["reasoning","daily_analysis","h1_analysis","lesson","message","reason","override_reason","error","mt5_comment"];
+var PILLCOLS = {status:1,level:1,execution_status:1,result:1,outcome:1,direction:1,ai_signal:1,final_decision:1,category:1,symbol:1,market_regime:1,setup:1,session:1,volatility_bucket:1,score_bucket:1,timeframe:1,daily_trend:1,h1_trend:1,momentum:1,market_structure:1,news_condition:1};
+
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+function fmtBytes(b){return b>=1048576?(b/1048576).toFixed(1)+" MB":Math.round(b/1024)+" KB";}
+function shortTime(iso){
+  if(!iso) return "—";
+  var m=String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  return m ? m[2]+"-"+m[3]+" "+m[4]+":"+m[5]+":"+m[6] : String(iso);
+}
+
+/* Status vocabulary follows the lifecycles named in schema.sql. */
+function pillClass(col,v){
+  var s=String(v).toUpperCase();
+  if(col==="status")           return s==="OK"?"p-good":s==="ERROR"?"p-crit":"p-warn";
+  if(col==="level")            return s==="ERROR"?"p-crit":s==="WARN"?"p-warn":"p-neut";
+  if(col==="execution_status") return (s==="EXECUTED"||s==="CLOSED")?"p-good":s==="PENDING"?"p-warn":"p-crit";
+  if(col==="result"||col==="outcome") return s==="WIN"?"p-good":s==="LOSS"?"p-crit":"p-neut";
+  return "p-neut";
+}
+
+function cell(col,v){
+  if(v===null||v===undefined||v==="") return '<td class="nul">null</td>';
+  if(col==="ai_score"){
+    var n=Math.max(0,Math.min(100,Number(v)));
+    return '<td class="num"><span class="meter"><span class="bar"><i style="width:'+n+'%"></i></span>'+esc(v)+'</span></td>';
+  }
+  if(col==="created_at"||col==="opened_at"||col==="closed_at"||col==="updated_at")
+    return '<td class="mono">'+esc(shortTime(v))+'</td>';
+  if(PILLCOLS[col]) return '<td><span class="pill '+pillClass(col,v)+'">'+esc(v)+'</span></td>';
+  if(col==="id"||/_id$|_ticket$|^magic$|retcode/.test(col)) return '<td class="id">'+esc(v)+'</td>';
+  if(typeof v==="number") return '<td class="num">'+esc(v)+'</td>';
+  if(JSONISH.indexOf(col)>=0||String(v).length>60) return '<td class="txt">'+esc(String(v).slice(0,160))+'</td>';
+  return '<td>'+esc(v)+'</td>';
+}
+
+/* ---------------- tiles ---------------- */
+function tiles(){
+  var total=0; names.forEach(function(n){total+=T[n].length;});
+  var d=T.decisions||[], tr=T.trades||[], ev=T.events||[], eq=T.equity_snapshots||[];
+  var ok=d.filter(function(r){return r.status==="ok";}).length;
+  var err=d.length-ok;
+  var bad=tr.filter(function(r){return ["REJECTED","FAILED","ORPHANED"].indexOf(r.execution_status)>=0;}).length;
+  var errEv=ev.filter(function(r){return r.level==="ERROR";}).length;
+  var last=eq.length?eq[eq.length-1]:null;
+  var lat=d.filter(function(r){return r.latency_ms;}).map(function(r){return r.latency_ms;});
+  var avg=lat.length?Math.round(lat.reduce(function(a,b){return a+b;},0)/lat.length):null;
+
+  var items=[
+    {k:"Rows stored",    v:total,      s:names.length+" tables"},
+    {k:"AI decisions",   v:d.length,   s:ok+" ok · "+err+" error", alert:err>0},
+    {k:"Trade attempts", v:tr.length,  s:bad?bad+" rejected / failed":"all accepted", alert:bad>0},
+    {k:"Log events",     v:ev.length,  s:errEv+" at ERROR", alert:errEv>0},
+    {k:"Equity",         v:last?(last.currency==="USD"?"$":"")+Number(last.equity).toFixed(2):"—", s:last?"balance "+Number(last.balance).toFixed(2):"no snapshots"},
+    {k:"Mean AI latency",v:avg?avg+" ms":"—", s:lat.length+" timed calls"}
+  ];
+  document.getElementById("tiles").innerHTML=items.map(function(i){
+    return '<div class="tile"><span class="k">'+i.k+'</span><span class="v'+(i.alert?" alert":"")+'">'+i.v+'</span><span class="s">'+i.s+'</span></div>';
+  }).join("");
+}
+
+/* ---------------- rail ---------------- */
+var PAGE_SIZE=25;
+var current=null;
+var currentPage=1;
+function rail(){
+  document.getElementById("tblcount").textContent=names.length;
+  document.getElementById("rail").innerHTML=names.map(function(n){
+    return '<button class="tbtn'+(T[n].length?"":" empty")+'" data-t="'+n+'"><span class="name">'+n+'</span><span class="n">'+T[n].length+'</span></button>';
+  }).join("");
+  Array.prototype.forEach.call(document.querySelectorAll(".tbtn"),function(b){
+    b.addEventListener("click",function(){select(b.getAttribute("data-t"));});
+  });
+}
+
+/* ---------------- table ---------------- */
+function visibleCols(name){
+  var all=COLS[name].map(function(c){return c.name;});
+  if(!document.getElementById("hide-empty").checked) return all;
+  var rows=T[name];
+  if(!rows.length) return all;
+  return all.filter(function(c){
+    return rows.some(function(r){return r[c]!==null&&r[c]!==undefined&&r[c]!=="";});
+  });
+}
+function filtered(name){
+  var q=document.getElementById("q").value.trim().toLowerCase();
+  var rows=T[name];
+  if(!q) return rows;
+  return rows.filter(function(r){
+    return Object.keys(r).some(function(k){return r[k]!==null&&String(r[k]).toLowerCase().indexOf(q)>=0;});
+  });
+}
+/* Page numbers around the current page: 1 … 4 5 [6] 7 8 … 20 */
+function pageWindow(page,pages){
+  if(pages<=7){
+    var all=[];
+    for(var i=1;i<=pages;i++) all.push(i);
+    return all;
+  }
+  var out=[1], from=Math.max(2,page-1), to=Math.min(pages-1,page+1);
+  if(page<=3){from=2;to=4;}
+  if(page>=pages-2){from=pages-3;to=pages-1;}
+  if(from>2) out.push("gap");
+  for(var j=from;j<=to;j++) out.push(j);
+  if(to<pages-1) out.push("gap");
+  out.push(pages);
+  return out;
+}
+
+function drawPager(page,pages){
+  var host=document.getElementById("pager");
+  if(pages<=1){host.innerHTML="";return;}
+
+  var parts=['<button class="pg" data-p="'+(page-1)+'"'+(page===1?" disabled":"")+' aria-label="Previous page">‹</button>'];
+
+  pageWindow(page,pages).forEach(function(p){
+    if(p==="gap"){parts.push('<span class="pg gap" aria-hidden="true">…</span>');return;}
+    parts.push('<button class="pg" data-p="'+p+'"'+(p===page?' aria-current="true"':"")+
+               ' aria-label="Page '+p+'">'+p+'</button>');
+  });
+
+  parts.push('<button class="pg" data-p="'+(page+1)+'"'+(page===pages?" disabled":"")+' aria-label="Next page">›</button>');
+  host.innerHTML=parts.join("");
+
+  Array.prototype.forEach.call(host.querySelectorAll("button[data-p]"),function(b){
+    b.addEventListener("click",function(){
+      currentPage=parseInt(b.getAttribute("data-p"),10);
+      render();
+      document.getElementById("scroll").scrollTop=0;
+    });
+  });
+}
+
+function render(){
+  var name=current, rows=filtered(name), cols=visibleCols(name), all=COLS[name].length;
+  var typeOf={}; COLS[name].forEach(function(c){typeOf[c.name]=c.type;});
+  var host=document.getElementById("scroll");
+
+  var pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));
+  if(currentPage>pages) currentPage=pages;
+  if(currentPage<1) currentPage=1;
+
+  var from=(currentPage-1)*PAGE_SIZE;
+  var slice=rows.slice(from,from+PAGE_SIZE);
+
+  if(!T[name].length){
+    host.innerHTML='<div class="empty"><div class="big">No rows yet</div><p>'+esc(DESC[name]||"")+'</p></div>';
+  } else if(!rows.length){
+    host.innerHTML='<div class="empty"><div class="big">Nothing matches that filter</div><p>'+T[name].length+' rows in <code>'+esc(name)+'</code> — none contain that text.</p></div>';
+  } else {
+    var head='<tr>'+cols.map(function(c){return '<th>'+esc(c)+'<span class="ty">'+esc(typeOf[c]||"")+'</span></th>';}).join("")+'</tr>';
+    var body=slice.map(function(r){
+      return '<tr data-i="'+T[name].indexOf(r)+'" tabindex="0">'+cols.map(function(c){return cell(c,r[c]);}).join("")+'</tr>';
+    }).join("");
+    host.innerHTML='<table><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';
+    Array.prototype.forEach.call(host.querySelectorAll("tbody tr"),function(tr){
+      function go(){openRow(name,parseInt(tr.getAttribute("data-i"),10),tr);}
+      tr.addEventListener("click",go);
+      tr.addEventListener("keydown",function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();go();}});
+    });
+  }
+
+  drawPager(currentPage,pages);
+
+  var hidden=all-cols.length;
+  var shown=rows.length?"rows "+(from+1)+"–"+(from+slice.length)+" of "+rows.length:"0 rows";
+  var scope=rows.length===T[name].length?"":" (filtered from "+T[name].length+")";
+  document.getElementById("f-left").textContent=
+    shown+scope+" · "+cols.length+" of "+all+" columns"+(hidden?" ("+hidden+" all-null hidden)":"");
+}
+function select(name){
+  current=name;
+  Array.prototype.forEach.call(document.querySelectorAll(".tbtn"),function(b){
+    b.setAttribute("aria-current",b.getAttribute("data-t")===name?"true":"false");
+  });
+  document.getElementById("t-name").textContent=name;
+  document.getElementById("t-desc").textContent=DESC[name]||"";
+  document.getElementById("q").value="";
+  currentPage=1;
+  try{localStorage.setItem("qb.table",name);}catch(e){}
+  render();
+}
+
+/* ---------------- row inspector ---------------- */
+var lastFocus=null;
+function fieldValue(col,v){
+  if(v===null||v===undefined||v==="") return '<div class="fv nul">null</div>';
+  var s=String(v);
+  if(JSONISH.indexOf(col)>=0){
+    var pretty=s;
+    try{pretty=JSON.stringify(JSON.parse(s),null,2);}catch(e){}
+    if(pretty.length>90||pretty.indexOf("\n")>=0) return '<pre>'+esc(pretty)+'</pre>';
+    return '<div class="fv m">'+esc(pretty)+'</div>';
+  }
+  if(PROSE.indexOf(col)>=0&&s.length>70) return '<div class="fv prose">'+esc(s)+'</div>';
+  if(col==="ai_score"){
+    var n=Math.max(0,Math.min(100,Number(v)));
+    return '<div class="fv m"><span class="meter"><span class="bar"><i style="width:'+n+'%"></i></span>'+esc(v)+' / 100</span></div>';
+  }
+  if(PILLCOLS[col]) return '<div class="fv"><span class="pill '+pillClass(col,v)+'">'+esc(v)+'</span></div>';
+  if(typeof v==="number"||/^-?\d+(\.\d+)?$/.test(s)) return '<div class="fv m">'+esc(s)+'</div>';
+  return '<div class="fv'+(s.length<70?" m":"")+'">'+esc(s)+'</div>';
+}
+function openRow(name,i,tr){
+  var r=T[name][i];
+  lastFocus=tr||null;
+  Array.prototype.forEach.call(document.querySelectorAll("tbody tr"),function(x){x.setAttribute("aria-selected","false");});
+  if(tr) tr.setAttribute("aria-selected","true");
+  document.getElementById("d-title").textContent=name+(r.id!==undefined?" #"+r.id:"");
+  document.getElementById("d-sub").textContent=
+    [r.symbol,r.created_at?shortTime(r.created_at):null].filter(Boolean).join("  ·  ")||(COLS[name].length+" columns");
+  document.getElementById("d-body").innerHTML=COLS[name].map(function(c){
+    return '<div class="fld"><div class="fk">'+esc(c.name)+'<em>'+esc(c.type)+(c.pk?" · pk":"")+'</em></div>'+fieldValue(c.name,r[c.name])+'</div>';
+  }).join("");
+  document.getElementById("drawer").classList.remove("hide");
+  document.getElementById("scrim").classList.remove("hide");
+  document.getElementById("d-close").focus();
+}
+function closeRow(){
+  document.getElementById("drawer").classList.add("hide");
+  document.getElementById("scrim").classList.add("hide");
+  Array.prototype.forEach.call(document.querySelectorAll("tbody tr"),function(x){x.setAttribute("aria-selected","false");});
+  if(lastFocus) lastFocus.focus();
+}
+
+/* ---------------- boot ---------------- */
+document.getElementById("m-path").textContent=META.path;
+document.getElementById("m-size").textContent=fmtBytes(META.size);
+document.getElementById("m-journal").textContent=String(META.journal).toUpperCase();
+document.getElementById("m-sqlite").textContent=META.sqlite;
+document.getElementById("m-when").textContent=shortTime(META.mtime);
+
+tiles(); rail();
+var start=null;
+try{start=localStorage.getItem("qb.table");}catch(e){}
+select(names.indexOf(start)>=0?start:names[0]);
+
+/* A new filter always starts back at page 1. */
+document.getElementById("q").addEventListener("input",function(){currentPage=1;render();});
+document.getElementById("hide-empty").addEventListener("change",render);
+document.getElementById("d-close").addEventListener("click",closeRow);
+document.getElementById("scrim").addEventListener("click",closeRow);
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeRow();});
+})();
+</script>

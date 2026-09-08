@@ -33,10 +33,9 @@ def _env_bool(name, default=False):
 # ---------------------------------------------------------------------
 
 SYMBOLS = [
-    "EURUSDm",
-    "GBPUSDm",
-    "BTCUSDm",
-    "XAUUSDm",
+    "EURUSD",
+    "GBPUSD",
+    "XAUUSD",
 ]
 
 # Override with a comma-separated SYMBOLS env var if you want to change
