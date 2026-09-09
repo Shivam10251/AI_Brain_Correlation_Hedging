@@ -25,8 +25,10 @@ from datetime import datetime, timezone
 
 from backend import config
 from backend.ai.brain import get_ai_decision
+from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
 from backend.market import news
+from backend.risk import money
 from backend.market.data_engine import fetch_multi_timeframe_data
 from backend.market.execution import execute_trade, new_client_order_id
 
@@ -148,6 +150,33 @@ def persist_equity(account):
     return repo.insert_equity_snapshot(account)
 
 
+def update_daily_ledger(account):
+    """
+    Sample the day's equity marks and worst floating loss (Phase 2).
+
+    Deliberately NOT throttled like the equity snapshot: the floating
+    low-water mark is the whole point, and a drawdown that happens
+    between two snapshots would otherwise be invisible. An open
+    position that dipped hard and recovered leaves no trace in the deal
+    history, so if it is not sampled here it is lost.
+    """
+
+    account_id = bot_state.get("account_id")
+
+    if account_id is None:
+        return None
+
+    day = repo_ledger.trading_day(bot_state.get("server_utc_offset_min"))
+
+    return repo_ledger.record_equity_marks(
+        account_id,
+        day,
+        equity=account.get("equity"),
+        balance=account.get("balance"),
+        floating_pnl=account.get("floating_pnl"),
+    )
+
+
 # =====================================================================
 # ONE SYMBOL, ONE CYCLE
 # =====================================================================
@@ -171,6 +200,8 @@ async def process_symbol(symbol, cycle_id):
     persist_market_state(symbol, market_data)
 
     persist_equity(market_data["account"])
+
+    update_daily_ledger(market_data["account"])
 
     # -------------------------------------------------------------
     # 2. AI decision (never raises)
@@ -235,6 +266,52 @@ async def process_symbol(symbol, cycle_id):
     return decision
 
 
+def plan_risk(symbol, signal, features, volume):
+    """
+    Work out what this trade puts at stake, BEFORE it is sent (Phase 2).
+
+    The stop is derived here with the same maths execution.py uses, so
+    the recorded risk describes the order that is actually about to go
+    out rather than an approximation of it.
+
+    Returns the risk fields for the trade intent. `risk_amount` is None
+    when the broker specification is missing - reported honestly rather
+    than guessed, because the Phase 3 risk engine must be able to tell
+    "no stop specification" apart from "zero risk".
+    """
+
+    entry = features.get("ask") if signal == "BUY" else features.get("bid")
+
+    if entry is None:
+        return {"risk_amount": None}
+
+    if signal == "BUY":
+        stop = entry * (1 - config.SL_PERCENT)
+    else:
+        stop = entry * (1 + config.SL_PERCENT)
+
+    profile = None
+
+    account_id = bot_state.get("account_id")
+
+    if account_id is not None:
+        profile = repo_meta.get_symbol_profile(account_id, symbol)
+
+    described = money.describe(
+        entry_price=entry,
+        stop_loss=stop,
+        direction=signal,
+        volume=volume,
+        spread=features.get("spread"),
+        symbol_profile=profile,
+    )
+
+    described["planned_stop_loss"] = stop
+    described["planned_entry"] = entry
+
+    return described
+
+
 async def execute_and_record(symbol, signal, decision, market_data):
     """
     Write the intent, send the order, then record the outcome.
@@ -248,6 +325,19 @@ async def execute_and_record(symbol, signal, decision, market_data):
     features = market_data.get("features") or {}
 
     client_order_id = new_client_order_id()
+
+    # Phase 2: money risk is known before the order exists, not after.
+    risk = plan_risk(symbol, signal, features, config.LOT_SIZE)
+
+    if risk.get("risk_amount") is None:
+        repo.insert_event(
+            f"{symbol}: risk_amount could not be computed - no broker "
+            f"specification for this symbol. Trade will be recorded "
+            f"without a money-risk figure.",
+            level="WARN",
+            category="RISK",
+            symbol=symbol,
+        )
 
     trade_id = repo.insert_trade_intent({
         "client_order_id": client_order_id,
@@ -265,6 +355,11 @@ async def execute_and_record(symbol, signal, decision, market_data):
         "ai_score": decision.get("ai_score"),
         "timeframe": decision.get("timeframe"),
         "news_condition": news.news_condition(decision.get("news")),
+
+        "risk_amount": risk.get("risk_amount"),
+        "stop_distance_price": risk.get("stop_distance_price"),
+        "stop_distance_effective": risk.get("stop_distance_effective"),
+        "spread_at_entry": risk.get("spread_at_entry"),
     })
 
     repo.update_decision(decision["id"], trade_id=trade_id)
@@ -276,6 +371,22 @@ async def execute_and_record(symbol, signal, decision, market_data):
     status = result.get("status")
 
     if status == "EXECUTED":
+
+        # Re-derive risk from the ACTUAL fill. Slippage moves the entry,
+        # and with it the real distance to the stop - so the planned
+        # figure is refined rather than trusted.
+        filled = money.describe(
+            entry_price=result.get("entry_price"),
+            stop_loss=result.get("stop_loss"),
+            direction=signal,
+            volume=result.get("filled_volume") or result.get("volume"),
+            spread=features.get("spread"),
+            symbol_profile=(
+                repo_meta.get_symbol_profile(bot_state["account_id"], symbol)
+                if bot_state.get("account_id") is not None else None
+            ),
+        )
+
         repo.update_trade(
             trade_id,
             execution_status="EXECUTED",
@@ -290,6 +401,10 @@ async def execute_and_record(symbol, signal, decision, market_data):
             deal_ticket=result.get("deal_ticket"),
             position_ticket=result.get("position_ticket"),
             raw_result=result.get("raw_result"),
+
+            risk_amount=filled.get("risk_amount"),
+            stop_distance_price=filled.get("stop_distance_price"),
+            stop_distance_effective=filled.get("stop_distance_effective"),
         )
 
         repo.insert_event(

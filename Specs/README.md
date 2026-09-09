@@ -33,7 +33,7 @@ Specs/
 |---|---|
 | 0 — audit | Complete (`Phase0_Audit_and_Execution_Plan.md`) |
 | 1 — foundation, versioning, broker profile, safety | Code complete; live checks in `decisions/phase1_windows_verification.md` |
-| 2 — money risk and daily ledger | Not started |
+| 2 — money risk and daily ledger | Code complete; live checks in `decisions/phase2_windows_verification.md` |
 | 3 — Risk Engine v1 | Not started |
 | 4 — data engine and cadence | Not started |
 | 5 — sizing and exits | Not started |

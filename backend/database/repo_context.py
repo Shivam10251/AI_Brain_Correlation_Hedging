@@ -4,7 +4,7 @@ Equity snapshots, market state, experiences, events and engine state.
 
 import json
 
-from ._common import _insert, _json, _rows, utc_now
+from ._common import _insert, _json, _rows, current_account_id, utc_now
 from .connection import get_connection, write_lock
 
 
@@ -23,6 +23,7 @@ def insert_equity_snapshot(snapshot):
         "open_positions": snapshot.get("open_positions"),
         "account_login": snapshot.get("account_login"),
         "currency": snapshot.get("currency"),
+        "account_id": snapshot.get("account_id") or current_account_id(),
     }
 
     return _insert("equity_snapshots", data)
@@ -79,6 +80,7 @@ def insert_market_state(state):
         "market_regime": state.get("market_regime"),
         "session": state.get("session"),
         "features_json": _json(state.get("features")),
+        "account_id": state.get("account_id") or current_account_id(),
     }
 
     return _insert("market_states", data)
@@ -194,6 +196,7 @@ def insert_event(message, level="INFO", category=None, symbol=None,
         "trade_id": trade_id,
         "decision_id": decision_id,
         "data_json": _json(data),
+        "account_id": current_account_id(),
     })
 
 

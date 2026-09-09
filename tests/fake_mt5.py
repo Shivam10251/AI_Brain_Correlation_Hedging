@@ -171,6 +171,19 @@ def _ticket():
     return world.next_ticket
 
 
+def _server_epoch():
+    """
+    Now, on the BROKER's clock.
+
+    MT5 reports deal and tick times as server wall clock expressed as
+    an epoch, so the ledger can read a deal's server date straight off
+    it. Modelling that here is what makes the trading-day boundary
+    testable.
+    """
+
+    return int(time.time() + world.server_offset_minutes * 60)
+
+
 # ---------------------------------------------------------------------
 # Value objects
 # ---------------------------------------------------------------------
@@ -469,7 +482,8 @@ def order_send(request):
         commission=0.0,
         swap=0.0,
         comment=request.get("comment", ""),
-        time=int(time.time()),
+        magic=request.get("magic", 0),
+        time=_server_epoch(),
     ))
 
     return _Result(
@@ -518,7 +532,8 @@ def history_deals_get(*args, **kwargs):
 # Test helpers (not part of the real MT5 API)
 # ---------------------------------------------------------------------
 
-def close_position(position_ticket, exit_price=None, profit=12.34):
+def close_position(position_ticket, exit_price=None, profit=12.34,
+                   commission=-0.10, swap=0.0):
     """Simulate SL/TP being hit or a manual close."""
 
     position = world.positions.pop(position_ticket, None)
@@ -541,14 +556,15 @@ def close_position(position_ticket, exit_price=None, profit=12.34):
         price=exit_price,
         volume=position.volume,
         profit=profit,
-        commission=-0.10,
-        swap=0.0,
+        commission=commission,
+        swap=swap,
         comment=position.comment,
-        time=int(time.time()),
+        magic=position.magic,
+        time=_server_epoch(),
     ))
 
-    world.balance += profit
-    world.equity += profit
+    world.balance += profit + commission + swap
+    world.equity += profit + commission + swap
 
     return exit_price
 

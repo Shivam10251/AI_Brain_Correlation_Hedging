@@ -26,7 +26,7 @@ from backend.ai import versioning
 from backend.core import engine
 from backend.core.engine import bot_state
 from backend.database import analytics, explorer, initialize_database
-from backend.database import repo_meta
+from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
 
 
@@ -397,6 +397,45 @@ async def meta_strategy():
         return {
             "current": descriptor,
             "registered": repo_meta.get_strategy_versions(limit=50),
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+@app.get("/api/ledger")
+async def get_ledger(
+    days: int = Query(30, ge=1, le=365),
+    account_id: int | None = None,
+):
+    """
+    Per-trading-day P&L (Phase 2).
+
+    `today` carries realised + floating exposure, which is the figure a
+    daily-loss rule is actually measured against.
+    """
+
+    def _read():
+        resolved = account_id or bot_state.get("account_id")
+
+        offset = bot_state.get("server_utc_offset_min")
+
+        day = repo_ledger.trading_day(offset)
+
+        floating = 0.0
+
+        if bot_state["mt5_connected"]:
+            info = mt5.account_info()
+            floating = getattr(info, "profit", 0.0) if info else 0.0
+
+        return {
+            "account_id": resolved,
+            "trading_day": day,
+            "server_utc_offset_min": offset,
+            "today": (
+                repo_ledger.day_summary(resolved, day, floating)
+                if resolved is not None else None
+            ),
+            "history": repo_ledger.get_ledgers(resolved, limit=days),
         }
 
     return await asyncio.to_thread(_read)

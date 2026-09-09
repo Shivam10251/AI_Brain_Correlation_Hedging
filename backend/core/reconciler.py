@@ -24,8 +24,10 @@ import MetaTrader5 as mt5
 
 from backend import config
 from backend.ai import memory
+from backend.database import repo_ledger
 from backend.database import repository as repo
 from backend.market.execution import comment_for
+from backend.risk import money
 
 
 DEAL_ENTRY_IN = 0
@@ -54,12 +56,25 @@ def _classify(pnl):
     return "BREAKEVEN"
 
 
-def _r_multiple(trade, exit_price):
+def _r_multiple(trade, exit_price, pnl=None):
     """
-    Realised R, measured in price terms against the original stop.
+    Realised R.
 
-    None when we have no stop distance to measure against.
+    Prefers the MONEY definition (Phase 2): realised P&L divided by the
+    currency amount that was at risk. That is the number every
+    prop-firm rule is expressed in, and because `pnl` is already net of
+    commission and swap it answers "how many multiples of what I risked
+    did I actually keep".
+
+    Falls back to the original price-based calculation for trades
+    written before risk_amount was populated, so historical rows keep
+    an R value rather than becoming NULL.
     """
+
+    money_r = money.r_multiple(pnl, trade.get("risk_amount"))
+
+    if money_r is not None:
+        return money_r
 
     entry = trade.get("entry_price")
     stop = trade.get("stop_loss")
@@ -230,7 +245,7 @@ def close_finished_trades():
 
         exit_price = settlement["exit_price"]
 
-        r_multiple = _r_multiple(trade, exit_price)
+        r_multiple = _r_multiple(trade, exit_price, settlement["pnl"])
 
         repo.update_trade(
             trade["id"],
@@ -245,6 +260,10 @@ def close_finished_trades():
         )
 
         settled = repo.get_trade(trade["id"])
+
+        # Phase 2: fold it into the trading day's ledger immediately,
+        # keyed on the day the position CLOSED on the broker's clock.
+        _apply_to_ledger(settled, settlement)
 
         repo.insert_event(
             f"{settled['symbol']} {settled['direction']} closed "
@@ -274,6 +293,39 @@ def close_finished_trades():
     return closed
 
 
+def _apply_to_ledger(settled, settlement):
+    """
+    Add one closed trade to its trading day (Phase 2).
+
+    The day is taken from the CLOSING deal's own server timestamp, not
+    from "today": a position that closes just after the server
+    midnight rollover belongs to the new day, and a reconciliation that
+    runs late must still file it correctly.
+    """
+
+    from backend.core.runtime import bot_state
+
+    account_id = (
+        settled.get("account_id") or bot_state.get("account_id")
+    )
+
+    if account_id is None:
+        return
+
+    day = (
+        repo_ledger.day_from_server_epoch(settlement.get("closed_epoch"))
+        or repo_ledger.trading_day(bot_state.get("server_utc_offset_min"))
+    )
+
+    repo_ledger.apply_closed_trade(
+        account_id,
+        day,
+        pnl=settlement["pnl"],
+        commission=settlement["commission"],
+        swap=settlement["swap"],
+    )
+
+
 def _settle_from_history(position_ticket):
     """Aggregate every deal belonging to one position."""
 
@@ -288,6 +340,7 @@ def _settle_from_history(position_ticket):
 
     exit_price = None
     closed_at = None
+    closed_epoch = None
 
     for deal in deals:
 
@@ -297,7 +350,8 @@ def _settle_from_history(position_ticket):
 
         if getattr(deal, "entry", None) == DEAL_ENTRY_OUT:
             exit_price = deal.price
-            closed_at = _iso(getattr(deal, "time", None))
+            closed_epoch = getattr(deal, "time", None)
+            closed_at = _iso(closed_epoch)
 
     if exit_price is None:
         return None
@@ -309,6 +363,10 @@ def _settle_from_history(position_ticket):
         "swap": round(total_swap, 2),
         "exit_price": exit_price,
         "closed_at": closed_at,
+
+        # Raw server timestamp, so the ledger can file this trade on
+        # the broker's calendar day rather than ours.
+        "closed_epoch": closed_epoch,
     }
 
 
@@ -391,22 +449,154 @@ def adopt_untracked_positions():
 
 
 # =====================================================================
+# PASS 4: reconcile the daily ledger against MT5 deal history
+# =====================================================================
+
+# Anything below this is rounding noise in the account currency.
+LEDGER_DRIFT_TOLERANCE = 0.01
+
+
+def _deal_totals_for_day(day, offset_minutes):
+    """
+    Rebuild one trading day's realised figures from MT5's own deals.
+
+    Only CLOSING deals carry a position's P&L, and only deals with our
+    magic number are ours - a manual trade in the same terminal must
+    not land in the bot's ledger.
+
+    Membership is decided per deal on its own SERVER date rather than
+    on the query window, because MT5 interprets the window in terminal
+    time and being off by the offset is precisely the bug this table
+    exists to avoid.
+    """
+
+    start, end = repo_ledger.day_bounds_utc(day, offset_minutes)
+
+    deals = mt5.history_deals_get(
+        start - timedelta(days=1),
+        end + timedelta(days=1),
+    )
+
+    totals = {
+        "realized_pnl": 0.0,
+        "gross_pnl": 0.0,
+        "commission": 0.0,
+        "swap": 0.0,
+        "trade_count": 0,
+        "win_count": 0,
+        "loss_count": 0,
+    }
+
+    for deal in deals or []:
+
+        if getattr(deal, "magic", None) != config.MAGIC_NUMBER:
+            continue
+
+        if getattr(deal, "entry", None) != DEAL_ENTRY_OUT:
+            continue
+
+        if repo_ledger.day_from_server_epoch(
+            getattr(deal, "time", None)
+        ) != day:
+            continue
+
+        profit = float(getattr(deal, "profit", 0.0) or 0.0)
+        commission = float(getattr(deal, "commission", 0.0) or 0.0)
+        swap = float(getattr(deal, "swap", 0.0) or 0.0)
+
+        net = profit + commission + swap
+
+        totals["gross_pnl"] += profit
+        totals["commission"] += commission
+        totals["swap"] += swap
+        totals["realized_pnl"] += net
+
+        totals["trade_count"] += 1
+
+        if net > 0:
+            totals["win_count"] += 1
+        elif net < 0:
+            totals["loss_count"] += 1
+
+    return totals
+
+
+def reconcile_daily_ledger():
+    """
+    Make today's ledger row agree with MT5, and shout if it did not.
+
+    The ledger is maintained incrementally as trades close so the
+    current figure is always fresh. This pass recomputes it from the
+    broker's own history and overwrites on disagreement: MT5 is the
+    source of truth, and a mirror that quietly diverges is worse than
+    no mirror at all - every prop-firm limit is checked against it.
+
+    Returns the absolute drift that was found.
+    """
+
+    from backend.core.runtime import bot_state
+
+    account_id = bot_state.get("account_id")
+
+    if account_id is None:
+        return 0.0
+
+    offset = bot_state.get("server_utc_offset_min")
+
+    day = repo_ledger.trading_day(offset)
+
+    before = repo_ledger.get_ledger(account_id, day)
+
+    totals = _deal_totals_for_day(day, offset)
+
+    previous = float((before or {}).get("realized_pnl") or 0.0)
+
+    drift = abs(previous - totals["realized_pnl"])
+
+    repo_ledger.apply_reconciled_totals(account_id, day, totals, drift)
+
+    if drift > LEDGER_DRIFT_TOLERANCE:
+        repo.insert_event(
+            f"Daily ledger drift on {day}: local {previous:+.2f} vs MT5 "
+            f"{totals['realized_pnl']:+.2f} (drift {drift:.2f}). "
+            f"Corrected to MT5.",
+            level="WARN",
+            category="RECONCILE",
+            data={
+                "trading_day": day,
+                "local_realized_pnl": previous,
+                "mt5_realized_pnl": totals["realized_pnl"],
+                "drift": drift,
+                **totals,
+            },
+        )
+
+    return drift
+
+
+# =====================================================================
 # ENTRY POINT
 # =====================================================================
 
 def run_full_reconciliation():
     """
-    All three passes, in dependency order.
+    All four passes, in dependency order.
 
     Each pass is isolated so one MT5 hiccup cannot abort the others.
+    The ledger runs last, so it sees everything the earlier passes
+    settled in this cycle.
     """
 
-    summary = {"resolved": 0, "closed": 0, "adopted": 0, "errors": []}
+    summary = {
+        "resolved": 0, "closed": 0, "adopted": 0,
+        "ledger_drift": 0.0, "errors": [],
+    }
 
     for key, function in (
         ("resolved", resolve_pending_trades),
         ("closed", close_finished_trades),
         ("adopted", adopt_untracked_positions),
+        ("ledger_drift", reconcile_daily_ledger),
     ):
         try:
             summary[key] = function()

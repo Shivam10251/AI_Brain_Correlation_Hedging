@@ -18,6 +18,24 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def current_account_id():
+    """
+    The MT5 account this process is attached to, or None (Phase 2).
+
+    Read from runtime state rather than passed down through every call
+    site. Defensive by design: a row that cannot be attributed is still
+    worth storing, so this never raises.
+    """
+
+    try:
+        from backend.core.runtime import bot_state
+
+        return bot_state.get("account_id")
+
+    except Exception:                               # noqa: BLE001
+        return None
+
+
 def _json(value):
     """Serialise to JSON, tolerating non-serialisable values."""
 

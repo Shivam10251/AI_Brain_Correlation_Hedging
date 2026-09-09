@@ -165,6 +165,9 @@ CREATE TABLE IF NOT EXISTS decisions (
     temperature         REAL,
     strategy_version_id INTEGER REFERENCES strategy_versions(id),
 
+    -- which MT5 account (Phase 2)
+    account_id          INTEGER,
+
     trade_id          INTEGER REFERENCES trades(id)
 );
 
@@ -203,7 +206,21 @@ CREATE TABLE IF NOT EXISTS trades (
     swap              REAL,
     result            TEXT,
     r_multiple        REAL,
+
+    -- Money at risk in ACCOUNT CURRENCY, computed before order_send
+    -- (Phase 2). Price-based R alone cannot evaluate a single
+    -- prop-firm rule, all of which are denominated in money.
     risk_amount       REAL,
+
+    -- Stop geometry, kept so the spread drag is measurable later.
+    --   stop_distance_price      |entry - sl|, what you lose if stopped
+    --   stop_distance_effective  |marking price - sl|, how far the
+    --                            market must move to stop you out
+    stop_distance_price     REAL,
+    stop_distance_effective REAL,
+    spread_at_entry         REAL,
+
+    account_id        INTEGER,
 
     reason            TEXT,
     decision_id       INTEGER REFERENCES decisions(id),
@@ -235,6 +252,61 @@ CREATE INDEX IF NOT EXISTS idx_trades_position  ON trades(position_ticket);
 
 
 -- ---------------------------------------------------------------------
+-- Daily ledger (Phase 2): one row per account per TRADING DAY.
+--
+-- Every prop-firm rule is denominated in money over a day - 3% daily
+-- loss, consistency, the max-loss floor. None of them could be
+-- evaluated before this table existed (Phase 0 §2.4).
+--
+-- trading_day is the BROKER SERVER's day (UTC shifted by
+-- server_utc_offset_min), because that is the day the firm computes
+-- its limits on. Storing UTC days here would silently misalign the
+-- daily loss limit by the offset.
+--
+-- realized_pnl is maintained incrementally as trades close, then
+-- reconciled against MT5's own deal history every cycle. MT5 wins.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS daily_ledger (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT    NOT NULL,
+    updated_at        TEXT,
+
+    account_id        INTEGER NOT NULL,
+    trading_day       TEXT    NOT NULL,       -- 'YYYY-MM-DD', server time
+
+    -- Realised, net of costs. gross_pnl excludes them.
+    realized_pnl      REAL    NOT NULL DEFAULT 0,
+    gross_pnl         REAL    NOT NULL DEFAULT 0,
+    commission        REAL    NOT NULL DEFAULT 0,
+    swap              REAL    NOT NULL DEFAULT 0,
+
+    -- Open risk. The daily limit is breached by realised + floating,
+    -- so the floating low-water mark has to be tracked separately.
+    max_floating_loss REAL    NOT NULL DEFAULT 0,
+
+    start_equity      REAL,
+    start_balance     REAL,
+    max_equity        REAL,
+    min_equity        REAL,
+    eod_equity        REAL,
+    eod_balance       REAL,
+
+    trade_count       INTEGER NOT NULL DEFAULT 0,
+    win_count         INTEGER NOT NULL DEFAULT 0,
+    loss_count        INTEGER NOT NULL DEFAULT 0,
+
+    -- Reconciliation against MT5 deal history.
+    reconciled_at     TEXT,
+    drift             REAL,
+
+    UNIQUE (account_id, trading_day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_day
+    ON daily_ledger(account_id, trading_day DESC);
+
+
+-- ---------------------------------------------------------------------
 -- Equity snapshots: raw points for the equity curve.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -247,7 +319,8 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
     floating_pnl    REAL,
     open_positions  INTEGER,
     account_login   INTEGER,
-    currency        TEXT
+    currency        TEXT,
+    account_id      INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_equity_created ON equity_snapshots(created_at DESC);
@@ -273,7 +346,8 @@ CREATE TABLE IF NOT EXISTS market_states (
     h1_trend          TEXT,
     market_regime     TEXT,
     session           TEXT,
-    features_json     TEXT
+    features_json     TEXT,
+    account_id        INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_market_symbol ON market_states(symbol, created_at DESC);
@@ -327,7 +401,8 @@ CREATE TABLE IF NOT EXISTS events (
     message     TEXT    NOT NULL,
     trade_id    INTEGER,
     decision_id INTEGER,
-    data_json   TEXT
+    data_json   TEXT,
+    account_id  INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);

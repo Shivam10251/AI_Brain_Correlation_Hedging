@@ -2,7 +2,9 @@
 Decisions and trades.
 """
 
-from ._common import _insert, _json, _rows, _update, utc_now
+from ._common import (
+    _insert, _json, _rows, _update, current_account_id, utc_now,
+)
 from .connection import get_connection, write_lock
 
 
@@ -66,6 +68,7 @@ def insert_decision(decision):
         "prompt_hash": decision.get("prompt_hash"),
         "temperature": decision.get("temperature"),
         "strategy_version_id": decision.get("strategy_version_id"),
+        "account_id": decision.get("account_id") or current_account_id(),
 
         "trade_id": decision.get("trade_id"),
     }
@@ -142,7 +145,14 @@ def insert_trade_intent(trade):
         "requested_price": trade.get("requested_price"),
         "stop_loss": trade.get("stop_loss"),
         "take_profit": trade.get("take_profit"),
+
+        # Phase 2: money at risk, computed BEFORE the order is sent.
         "risk_amount": trade.get("risk_amount"),
+        "stop_distance_price": trade.get("stop_distance_price"),
+        "stop_distance_effective": trade.get("stop_distance_effective"),
+        "spread_at_entry": trade.get("spread_at_entry"),
+
+        "account_id": trade.get("account_id") or current_account_id(),
         "reason": trade.get("reason"),
         "decision_id": trade.get("decision_id"),
         "execution_status": "PENDING",
