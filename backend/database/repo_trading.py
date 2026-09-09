@@ -16,7 +16,10 @@ DECISION_COLUMNS = (
     "market_regime", "setup", "ai_score", "ai_signal", "final_decision",
     "override_reason", "reasoning", "daily_analysis", "h1_analysis",
     "features_json", "news_json", "experience_ids", "raw_response",
-    "latency_ms", "error", "trade_id",
+    "latency_ms", "error",
+    # Phase 1 - reproducibility
+    "prompt_hash", "temperature", "strategy_version_id",
+    "trade_id",
 )
 
 
@@ -56,6 +59,14 @@ def insert_decision(decision):
         "raw_response": decision.get("raw_response"),
         "latency_ms": decision.get("latency_ms"),
         "error": decision.get("error"),
+
+        # Phase 1: which exact strategy produced this row. Present on
+        # failed decisions too, so a calibration study can see the
+        # denominator and not just the successes.
+        "prompt_hash": decision.get("prompt_hash"),
+        "temperature": decision.get("temperature"),
+        "strategy_version_id": decision.get("strategy_version_id"),
+
         "trade_id": decision.get("trade_id"),
     }
 
@@ -212,6 +223,22 @@ def get_open_trades():
         "SELECT * FROM trades "
         "WHERE execution_status = 'EXECUTED' AND closed_at IS NULL "
         "ORDER BY id ASC"
+    ))
+
+
+def get_open_position_tickets():
+    """
+    Every position ticket the database still considers open.
+
+    Used by the reconciler's adoption pass. It must not be bounded by
+    a row limit: the previous implementation scanned only the most
+    recent 1,000 trades, so an older still-open position dropped out
+    of the known set and was re-adopted on every cycle (Phase 0 §2.7).
+    """
+
+    return _rows(get_connection().execute(
+        "SELECT id, symbol, position_ticket FROM trades "
+        "WHERE position_ticket IS NOT NULL AND closed_at IS NULL"
     ))
 
 

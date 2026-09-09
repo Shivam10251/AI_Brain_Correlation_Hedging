@@ -1,224 +1,144 @@
-# Ruflo — Claude Code Configuration
+# AI_Brain_Correlation_Hedging
 
-## Rules
+A MetaTrader 5 trading bot: an LLM reads multi-timeframe bars, a risk
+layer decides whether its signal may become an order, and SQLite is a
+durable audit trail with MT5 as the source of truth.
 
-- Do what has been asked; nothing more, nothing less
-- NEVER create files unless absolutely necessary — prefer editing existing files
-- NEVER create documentation files unless explicitly requested
-- NEVER save working files or tests to root — use `/src`, `/tests`, `/docs`, `/config`, `/scripts`
-- ALWAYS read a file before editing it
-- NEVER commit secrets, credentials, or .env files
-- NEVER add a `Co-Authored-By` trailer to user commits unless this project's `.claude/settings.json` has `attribution.commit` set (#2078). The Claude Code Bash tool may suggest one in its default commit-message template — ignore it. `Co-Authored-By` is semantic authorship attribution under git/GitHub convention; the tool is the facilitator, not a co-author.
-- Keep files under 500 lines
-- Validate input at system boundaries
+**MetaTrader 5 only.** Any other platform, broker or instrument is out
+of scope — see `Specs/MT5_Build_Plan.md`.
 
-## Ruflo Capability Brain & Implementation Loop
+---
 
-Ruflo is the coordination ledger and policy decision point. Claude Code is the
-executor: after a Ruflo coordination call, continue implementing the task.
-
-When it is registered, call
-`guidance_brain({ mode: "recommend", task: "..." })` before complex Ruflo
-work. Use its live registry instead of guessing tool names. Treat
-`registered`, `configured`, `reachable`, `healthy`, and `authorized`
-as separate facts. If the brain is unavailable, continue with the compatible
-`guidance_recommend` tool, CLI discovery, and repository instructions.
-
-Follow the returned loop:
-
-1. Recall memory and ADR constraints.
-2. Inspect source, runtime, dependencies, policy, and health.
-3. Route to the smallest capable topology, agents, skills, and tools.
-4. Plan acceptance criteria, safety envelope, ownership, and validation.
-5. Execute in isolated scopes; the coding agent performs the work.
-6. Test focused, regression, and failure paths.
-7. Validate types, security, policy, compatibility, and artifacts.
-8. Benchmark a source-bound candidate against a source-bound baseline.
-9. Optimize measured bottlenecks without weakening safety.
-10. Bind claims and evidence to exact source/build receipts.
-11. Reconcile concurrent handoffs and disclose limitations.
-12. Publish only through a separately authorized release gate.
-
-### Concurrency and authority
-
-- Never allow two writers in one worktree; give each writing agent an isolated
-  worktree and explicit file ownership.
-- Read-only research may run concurrently and report findings to the owner.
-- Only the integration owner edits shared manifests and lockfiles or reconciles
-  overlapping changes.
-- A child may drop capabilities but cannot add tools, network, secrets, spend,
-  concurrency, namespaces, or delegation depth.
-- A lease or claim coordinates ownership; it does not authorize a side effect.
-- Darwin, Flywheel, MetaHarness, memory, and neural systems may propose or
-  evaluate candidates but cannot self-promote or expand their SafetyEnvelope.
-- Bind tests, benchmarks, policy decisions, and release evidence to an exact
-  commit or immutable dirty-worktree snapshot.
-
-## Agent Comms (SendMessage-First Coordination)
-
-Named agents coordinate via `SendMessage`, not polling or shared state.
-
-```
-Lead (you) ←→ architect ←→ developer ←→ tester ←→ reviewer
-              (named agents message each other directly)
-```
-
-### Spawning a Coordinated Team
-
-```javascript
-// ALL agents in ONE message, each knows WHO to message next
-Agent({ prompt: "Research the codebase. SendMessage findings to 'architect'.",
-  subagent_type: "researcher", name: "researcher", run_in_background: true })
-Agent({ prompt: "Wait for 'researcher'. Design solution. SendMessage to 'coder'.",
-  subagent_type: "system-architect", name: "architect", run_in_background: true })
-Agent({ prompt: "Wait for 'architect'. Implement it. SendMessage to 'tester'.",
-  subagent_type: "coder", name: "coder", run_in_background: true })
-Agent({ prompt: "Wait for 'coder'. Write tests. SendMessage results to 'reviewer'.",
-  subagent_type: "tester", name: "tester", run_in_background: true })
-Agent({ prompt: "Wait for 'tester'. Review code quality and security.",
-  subagent_type: "reviewer", name: "reviewer", run_in_background: true })
-
-// Kick off the pipeline
-SendMessage({ to: "researcher", summary: "Start", message: "[task context]" })
-```
-
-### Patterns
-
-| Pattern | Flow | Use When |
-|---------|------|----------|
-| **Pipeline** | A → B → C → D | Sequential dependencies (feature dev) |
-| **Fan-out** | Lead → A, B, C → Lead | Independent parallel work (research) |
-| **Supervisor** | Lead ↔ workers | Ongoing coordination (complex refactor) |
-
-### Rules
-
-- ALWAYS name agents — `name: "role"` makes them addressable
-- ALWAYS include comms instructions in prompts — who to message, what to send
-- Spawn ALL agents in ONE message with `run_in_background: true`
-- After spawning, continue independent local work; wait only when a dependency
-  genuinely blocks progress
-- Do not poll repeatedly — agents message back or complete automatically
-- Give every writing agent an isolated worktree and a non-overlapping file scope
-
-## Swarm & Routing
-
-### Config
-- **Topology**: hierarchical-mesh (anti-drift)
-- **Max Agents**: 15
-- **Memory**: hybrid
-- **HNSW**: Enabled
-- **Neural**: Enabled
+## Run it
 
 ```bash
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
+uvicorn backend.main:app --host 127.0.0.1 --port 8000   # macOS/Linux (no MT5)
+start_bot.bat                                            # Windows trading host
 ```
 
-### Agent Routing
+- `http://127.0.0.1:8000/` — live engine dashboard
+- `http://127.0.0.1:8000/dashboard` — read-only Quant DB explorer
 
-| Task | Agents | Topology |
-|------|--------|----------|
-| Bug Fix | researcher, coder, tester | hierarchical |
-| Feature | architect, coder, tester, reviewer | hierarchical |
-| Refactor | architect, coder, reviewer | hierarchical |
-| Performance | perf-engineer, coder | hierarchical |
-| Security | security-architect, auditor | hierarchical |
+Config comes from `.env`; copy `env.example` (no leading dot — the
+`.gitignore` pattern `.env.*` would swallow `.env.example`).
 
-### When to Swarm
-- **YES**: 3+ files, new features, cross-module refactoring, API changes, security, performance
-- **NO**: single file edits, 1-2 line fixes, docs updates, config changes, questions
-
-### 3-Tier Model Routing
-
-| Tier | Handler | Use Cases |
-|------|---------|-----------|
-| 1 | Agent Booster (WASM) | Simple transforms — skip LLM, use Edit directly |
-| 2 | Haiku | Simple tasks, low complexity |
-| 3 | Sonnet/Opus | Architecture, security, complex reasoning |
-
-## Memory & Learning
-
-### Before Any Task
-```bash
-npx @claude-flow/cli@latest memory search --query "[task keywords]" --namespace patterns
-npx @claude-flow/cli@latest hooks route --task "[task description]"
-```
-
-### After Success
-```bash
-npx @claude-flow/cli@latest memory store --namespace patterns --key "[name]" --value "[what worked]"
-npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --store-results true
-```
-
-### MCP Tools (use `ToolSearch("keyword")` to discover)
-
-| Category | Key Tools |
-|----------|-----------|
-| **Memory** | `memory_store`, `memory_search`, `memory_search_unified` |
-| **Bridge** | `memory_import_claude`, `memory_bridge_status` |
-| **Swarm** | `swarm_init`, `swarm_status`, `swarm_health` |
-| **Agents** | `agent_spawn`, `agent_list`, `agent_status` |
-| **Hooks** | `hooks_route`, `hooks_post-task`, `hooks_worker-dispatch` |
-| **Security** | `aidefence_scan`, `aidefence_is_safe`, `aidefence_has_pii` |
-| **Hive-Mind** | `hive-mind_init`, `hive-mind_consensus`, `hive-mind_spawn` |
-
-### Background Workers
-
-| Worker | When |
-|--------|------|
-| `audit` | After security changes |
-| `optimize` | After performance work |
-| `testgaps` | After adding features |
-| `map` | Every 5+ file changes |
-| `document` | After API changes |
+## Test it
 
 ```bash
-npx @claude-flow/cli@latest hooks worker dispatch --trigger audit
+pytest                    # everything: 55 items, incl. all 79 legacy checks
+pytest -q tests/test_phase1_foundation.py
 ```
 
-## Agents
+There is no `npm`, no build step. `pytest` is the whole gate, and CI
+runs exactly that.
 
-**Core**: `coder`, `reviewer`, `tester`, `planner`, `researcher`
-**Architecture**: `system-architect`, `backend-dev`, `mobile-dev`
-**Security**: `security-architect`, `security-auditor`
-**Performance**: `performance-engineer`, `perf-analyzer`
-**Coordination**: `hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`
-**GitHub**: `pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`
+`MetaTrader5` is Windows-only, so **every test runs against
+`tests/fake_mt5.py`**, installed into `sys.modules` by
+`tests/conftest.py` before any backend import. CI asserts the real
+package is *not* installed.
 
-Any string works as a custom agent type.
+The two original suites (`test_api.py`, `test_restart_recovery.py`) are
+standalone scripts that `sys.exit()` at import. They are excluded from
+collection and driven as subprocesses by `test_legacy_suites.py`, so
+all 79 of their checks still run.
 
-## Build & Test
+---
 
-- ALWAYS run tests after code changes
-- ALWAYS verify build succeeds before committing
+## Layout
 
-```bash
-npm run build && npm test
+```
+backend/
+  main.py            FastAPI app, lifespan recovery, all endpoints
+  auth.py            bearer-token middleware (Phase 1)
+  config.py          every setting, from .env
+  core/
+    engine.py        per-cycle pipeline and the risk gate
+    runtime.py       shared bot_state, MT5 connection, engine lock
+    reconciler.py    database <-> MT5 reconciliation, 3 passes
+  ai/
+    brain.py         DeepSeek call, validation, safe-HOLD on every failure
+    prompts.py       prompt construction  <- THIS IS THE STRATEGY
+    versioning.py    prompt hashing + strategy_versions (Phase 1)
+    memory.py        experience distillation and retrieval
+  market/
+    data_engine.py   candles, account snapshot, derived features
+    execution.py     order placement, idempotent client order ids
+    broker_profile.py measured broker/symbol facts (Phase 1)
+    news.py          extension point, no-op by default
+  database/
+    schema.sql       tables; additive migrations in connection.py
+    repository.py    public data-access façade
+    repo_trading.py  decisions + trades
+    repo_context.py  equity, market state, experiences, events
+    repo_meta.py     strategy versions, broker/symbol profiles
+    explorer.py      read-only SQL surface for /dashboard
+    analytics.py     P&L, win rate, drawdown, streaks
+
+frontend/templates/  index.html (engine), dashboard.html (DB explorer)
+data/quantbot.db     runtime, gitignored
+Specs/               plans, decisions, research  <- read before building
 ```
 
-## CLI Quick Reference
+---
 
-```bash
-npx @claude-flow/cli@latest init --wizard           # Setup
-npx @claude-flow/cli@latest swarm init --v3-mode     # Start swarm
-npx @claude-flow/cli@latest memory search --query "" # Vector search
-npx @claude-flow/cli@latest hooks route --task ""    # Route to agent
-npx @claude-flow/cli@latest doctor --fix             # Diagnostics
-npx @claude-flow/cli@latest security scan            # Security scan
-npx @claude-flow/cli@latest performance benchmark    # Benchmarks
-```
+## Invariants — do not break these
 
-26 commands, 140+ subcommands. Use `--help` on any command for details.
+1. **MT5 is the source of truth** for positions, fills and P&L. The
+   database mirrors it. The reconciler corrects the mirror; it never
+   writes to MT5.
 
-## Setup
+2. **Intent is written before the order is sent.** The PENDING `trades`
+   row plus its `client_order_id` comment tag is what makes execution
+   idempotent across a crash. After a restart an ambiguous attempt is
+   resolved by *asking MT5*, never by re-sending.
 
-```bash
-claude mcp add claude-flow -- npx -y ruflo@latest mcp start
-npx ruflo@latest doctor --fix
-```
+3. **`get_ai_decision()` never raises.** Every failure returns a dict
+   with `signal: "HOLD"` and a non-`ok` status. A malformed AI response
+   must not be able to reach the execution path.
 
-> The background `daemon` is optional. It runs interval workers that each spawn
-> a headless `claude` session, so it consumes tokens continuously. Start it only
-> if you want those sweeps: `npx ruflo@latest daemon start` (self-stops after 12h
-> by default; `--ttl 0` to disable, `daemon status --all` to audit running daemons).
+4. **A rejection is data, not an exception.** `execute_trade()` returns
+   a structured result; rejections are persisted with their retcode.
 
-**Agent tool** handles execution (agents, files, code, git). **MCP tools** handle coordination (swarm, memory, hooks). **CLI** is the same via Bash.
+5. **No silent overrides.** If `final_decision` differs from
+   `ai_signal`, `override_reason` says why and a WARN event is written.
+
+6. **Never assume a broker fact.** Filling mode, digits, tick value,
+   stops level and the server UTC offset are *measured* into
+   `broker_profiles` / `symbol_profiles` at startup. Hardcoding any of
+   them is how the pre-Phase-1 bugs happened (Phase 0 §2.2, §2.6).
+
+7. **Migrations are additive only.** `ADDITIVE_COLUMNS` in
+   `database/connection.py` may add a column; it may never drop,
+   rename or retype one. A live database holds real trading history.
+
+8. **The dashboard cannot write.** `explorer.py` opens its own
+   connection with `PRAGMA query_only = ON`.
+
+9. **Every decision references a strategy version.** Editing
+   `prompts.py` changes the hash, which registers a new version rather
+   than silently polluting the previous one's trade population.
+
+---
+
+## Working rules
+
+- Do what was asked; nothing more.
+- Prefer editing an existing module over adding one.
+- Read a file before editing it.
+- Never commit `.env`, secrets, or anything under `data/`.
+- Do not add a `Co-Authored-By` trailer unless
+  `.claude/settings.json` sets `attribution.commit`.
+- Run `pytest` after any change. All 79 legacy checks must stay green.
+- Trading-behaviour changes ship as a **new strategy version**, never
+  as an in-place edit to a running one.
+
+## Phases
+
+`Specs/MT5_Build_Plan.md` is the active plan; one branch per phase,
+merged to `main` before the next begins. No phase starts until the
+previous one's acceptance criteria pass — in CI *and* on the demo
+terminal (`Specs/decisions/phase*_windows_verification.md`).
+
+**Phase 6 is a hard gate.** It asks whether the AI score predicts
+anything at all, over ≥200 closed demo trades. Nothing after it gets
+built until it passes.

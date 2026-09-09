@@ -13,6 +13,20 @@ Changes from the original:
     behaviour discarded rejected trades entirely.
 
   * Price / SL / TP / volume / magic maths is UNCHANGED.
+
+Phase 1 changes:
+
+  * Filling mode is READ from the symbol's broker profile instead of
+    being hardcoded to IOC. A broker that only accepts FOK previously
+    rejected every single order with no obvious cause.
+
+  * Deviation is expressed in basis points of price and converted to
+    instrument-correct points, then clamped to the broker's own
+    trade_stops_level. The old fixed 20 points meant 2 pips on EURUSD
+    and $0.20 on BTCUSD (Phase 0 §2.6).
+
+Both fall back to the previous behaviour when no broker profile has
+been captured yet, so the module still works before first startup.
 """
 
 import uuid
@@ -34,6 +48,70 @@ def new_client_order_id():
     """Unique id for one execution attempt."""
 
     return uuid.uuid4().hex
+
+
+def _symbol_profile(symbol):
+    """
+    The stored broker specification for this symbol, or None.
+
+    Read lazily and defensively: execution must never fail because the
+    profile table is missing or the database is momentarily locked.
+    """
+
+    try:
+        from backend.core.runtime import bot_state
+        from backend.database import repo_meta
+
+        account_id = bot_state.get("account_id")
+
+        if account_id is None:
+            return None
+
+        return repo_meta.get_symbol_profile(account_id, symbol)
+
+    except Exception:                               # noqa: BLE001
+        return None
+
+
+def resolve_execution_params(symbol, price, symbol_info=None):
+    """
+    Decide filling mode and deviation for one order.
+
+    Prefers the stored broker profile; falls back to reading
+    symbol_info live; falls back again to the legacy constants. Returns
+    (type_filling, deviation_points, source) where `source` records
+    which path was taken, for the audit trail.
+    """
+
+    from backend.market.broker_profile import (
+        deviation_points,
+        resolve_filling_mode,
+    )
+
+    profile = _symbol_profile(symbol)
+
+    if profile and profile.get("filling_order_type") is not None:
+        return (
+            int(profile["filling_order_type"]),
+            deviation_points(profile, price),
+            "profile",
+        )
+
+    # No stored profile yet - read the terminal directly rather than
+    # guessing IOC.
+    info = symbol_info if symbol_info is not None else mt5.symbol_info(symbol)
+
+    if info is not None:
+        _, order_type = resolve_filling_mode(getattr(info, "filling_mode", 0))
+
+        live = {
+            "point": getattr(info, "point", None),
+            "trade_stops_level": getattr(info, "trade_stops_level", 0),
+        }
+
+        return int(order_type), deviation_points(live, price), "symbol_info"
+
+    return mt5.ORDER_FILLING_IOC, config.DEVIATION, "fallback"
 
 
 def comment_for(client_order_id):
@@ -226,6 +304,14 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
     order_comment = comment_for(client_order_id)
 
     # ---------------------------------------------------------
+    # Filling mode + deviation, from the broker's own numbers
+    # ---------------------------------------------------------
+
+    type_filling, deviation, params_source = resolve_execution_params(
+        symbol, price, symbol_info
+    )
+
+    # ---------------------------------------------------------
     # Print what we're attempting
     # ---------------------------------------------------------
 
@@ -238,6 +324,8 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
     print("TP:", tp)
     print("Digits:", digits)
     print("Volume:", volume)
+    print("Filling:", type_filling, f"({params_source})")
+    print("Deviation:", deviation, "points")
     print("Tag:", order_comment)
     print("========================================")
 
@@ -253,13 +341,13 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
         "price": price,
         "sl": sl,
         "tp": tp,
-        "deviation": config.DEVIATION,
+        "deviation": deviation,
         "magic": config.MAGIC_NUMBER,
         "comment": order_comment,
         "type_time": mt5.ORDER_TIME_GTC,
 
-        # Let MT5 use the symbol's supported filling mode
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        # Chosen from symbol_info.filling_mode - never hardcoded.
+        "type_filling": type_filling,
     }
 
     # Everything the caller needs to persist the attempt, whatever
@@ -274,6 +362,9 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
         "take_profit": tp,
         "magic": config.MAGIC_NUMBER,
         "mt5_comment": order_comment,
+        "type_filling": type_filling,
+        "deviation": deviation,
+        "params_source": params_source,
     }
 
     # ---------------------------------------------------------

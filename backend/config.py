@@ -60,7 +60,14 @@ LOT_SIZE = _env_float("LOT_SIZE", 0.01)
 
 MAGIC_NUMBER = _env_int("MAGIC_NUMBER", 100001)
 
+# Legacy fixed deviation, in points. Retained only as the fallback for
+# a symbol whose broker profile has not been captured yet.
 DEVIATION = _env_int("DEVIATION", 20)
+
+# Phase 1: deviation expressed in basis points of price, so it means
+# the same thing on a 5-digit FX pair and a 2-digit crypto symbol.
+# 20 points was 2 pips on EURUSD but $0.20 on BTCUSD - see Phase 0 §2.6.
+DEVIATION_BPS = _env_float("DEVIATION_BPS", 5.0)
 
 
 # ---------------------------------------------------------------------
@@ -143,6 +150,28 @@ NEWS_ENABLED = _env_bool("NEWS_ENABLED", False)
 NEWS_PROVIDER = os.getenv("NEWS_PROVIDER", "null")
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+
+# ---------------------------------------------------------------------
+# API security (Phase 1)
+#
+# Phase 0 §2.1: POST /api/control started and stopped the engine, and
+# could set a 1-second interval, with no authentication, on a process
+# bound to 0.0.0.0. On a VPS that is a remote kill switch for anyone
+# who can reach the port.
+#
+# Set API_TOKEN in .env to require a bearer token on every /api/* route
+# except /api/health. Leave it unset for a purely local run - the
+# server then refuses to bind anything but loopback unless you also set
+# ALLOW_INSECURE_BIND=true.
+# ---------------------------------------------------------------------
+
+API_TOKEN = os.getenv("API_TOKEN")
+
+AUTH_ENABLED = bool(API_TOKEN)
+
+# Guard against running unauthenticated on a public interface.
+ALLOW_INSECURE_BIND = _env_bool("ALLOW_INSECURE_BIND", False)
 
 
 # ---------------------------------------------------------------------

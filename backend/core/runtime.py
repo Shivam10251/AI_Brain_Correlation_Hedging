@@ -40,6 +40,13 @@ bot_state = {
     "last_error": None,
     "symbols": config.SYMBOLS,
     "owns_engine_lock": False,
+
+    # Phase 1: measured broker facts and the frozen strategy identity.
+    # None means NOT YET MEASURED - never assume a value here.
+    "account_id": None,
+    "server_utc_offset_min": None,
+    "margin_mode": None,
+    "strategy_version_id": None,
 }
 
 

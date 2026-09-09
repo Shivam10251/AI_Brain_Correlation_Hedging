@@ -1,0 +1,114 @@
+name: CI
+
+# Phase 1 acceptance: "CI green".
+#
+# MetaTrader5 is Windows-only, so CI runs on Linux against
+# tests/fake_mt5.py. That shim is what makes the persistence,
+# reconciliation and broker-profile logic testable off a trading host.
+
+on:
+  push:
+    branches: [main, "phase-*", "feat/**", "fix/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Verify MetaTrader5 is NOT installed
+        # The suites must prove they run against the shim. If the real
+        # package ever appeared here, the tests would be exercising
+        # something CI cannot actually talk to.
+        run: |
+          if python -c "import MetaTrader5" 2>/dev/null; then
+            echo "MetaTrader5 must not be installed in CI"
+            exit 1
+          fi
+          echo "OK: running against tests/fake_mt5.py"
+
+      - name: Run test suite
+        run: pytest -v
+
+      - name: Check the live database was never touched
+        # Nothing in the suite may create or write data/quantbot.db.
+        run: |
+          if [ -f data/quantbot.db ]; then
+            echo "Tests wrote to data/quantbot.db - they must use a temp path"
+            exit 1
+          fi
+          echo "OK: data/ untouched"
+
+  lint:
+    name: syntax + import check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Compile every module
+        run: python -m compileall -q backend tests
+
+      - name: Templates contain no unrendered Jinja after render
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+
+          failures = []
+
+          for path in pathlib.Path("frontend/templates").glob("*.html"):
+              text = path.read_text()
+
+              # Every {{ ... }} must be a variable main.py actually passes.
+              allowed = {"api_token", "request"}
+
+              for match in re.findall(r"\{\{\s*([a-zA-Z_][\w.]*)", text):
+                  root = match.split(".")[0]
+                  if root not in allowed:
+                      failures.append(f"{path.name}: unknown template var {match!r}")
+
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+
+          print("OK: templates reference only known variables")
+          PY

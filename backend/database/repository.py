@@ -20,6 +20,7 @@ from .repo_trading import (
     count_open_trades_for_symbol,
     get_decisions,
     get_latest_decision_per_symbol,
+    get_open_position_tickets,
     get_open_trades,
     get_pending_trades,
     get_trade,
@@ -65,6 +66,7 @@ __all__ = [
     "get_trade_by_client_order_id",
     "get_trades",
     "get_open_trades",
+    "get_open_position_tickets",
     "get_pending_trades",
     "count_open_trades_for_symbol",
 

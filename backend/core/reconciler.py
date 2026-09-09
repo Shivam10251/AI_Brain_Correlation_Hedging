@@ -330,9 +330,16 @@ def adopt_untracked_positions():
     if not positions:
         return 0
 
+    # Phase 0 §2.7: this used get_trades(limit=1000), so once history
+    # exceeded 1,000 rows any still-open position older than the last
+    # 1,000 trades fell out of the known set and was re-adopted every
+    # cycle - a duplicate row every 30 seconds, forever.
+    #
+    # The correct set is "every trade we believe is still open", which
+    # is unbounded by history size.
     known = {
         trade["position_ticket"]
-        for trade in repo.get_trades(limit=1000)
+        for trade in repo.get_open_position_tickets()
         if trade.get("position_ticket")
     }
 

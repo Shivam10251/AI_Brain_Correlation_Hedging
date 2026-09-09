@@ -29,21 +29,88 @@ POSITION_TYPE_BUY = 0
 POSITION_TYPE_SELL = 1
 
 TRADE_ACTION_DEAL = 1
+TRADE_ACTION_SLTP = 2
 
 ORDER_TIME_GTC = 0
+
+# Order filling ENUM (what a request carries).
+ORDER_FILLING_FOK = 0
 ORDER_FILLING_IOC = 1
+ORDER_FILLING_RETURN = 2
+
+# Symbol filling BITMASK (what a broker advertises). Different
+# numbering from the enum above - conflating the two is exactly the
+# Phase 1 bug being guarded against.
+SYMBOL_FILLING_FOK = 1
+SYMBOL_FILLING_IOC = 2
 
 TRADE_RETCODE_DONE = 10009
 TRADE_RETCODE_DONE_PARTIAL = 10010
 TRADE_RETCODE_REJECT = 10006
+TRADE_RETCODE_INVALID_FILL = 10030
 
 DEAL_ENTRY_IN = 0
 DEAL_ENTRY_OUT = 1
+
+# account_info().margin_mode
+ACCOUNT_MARGIN_MODE_RETAIL_NETTING = 0
+ACCOUNT_MARGIN_MODE_EXCHANGE = 1
+ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
 
 
 # ---------------------------------------------------------------------
 # Mutable world state - tests poke at these directly
 # ---------------------------------------------------------------------
+
+# Per-symbol broker specifications, so tests can exercise the three
+# instrument shapes the sizing maths has to survive: a 5-digit FX pair,
+# a 2-digit crypto symbol and a 3-digit metal.
+SYMBOL_SPECS = {
+    "EURUSDm": {
+        "digits": 5, "point": 0.00001, "price": 1.10000,
+        "trade_tick_size": 0.00001, "trade_tick_value": 1.0,
+        "trade_contract_size": 100_000.0,
+        "volume_min": 0.01, "volume_step": 0.01, "volume_max": 200.0,
+        "filling_mode": SYMBOL_FILLING_FOK | SYMBOL_FILLING_IOC,
+        "trade_stops_level": 10, "spread": 12,
+    },
+    "GBPUSDm": {
+        "digits": 5, "point": 0.00001, "price": 1.27000,
+        "trade_tick_size": 0.00001, "trade_tick_value": 1.0,
+        "trade_contract_size": 100_000.0,
+        "volume_min": 0.01, "volume_step": 0.01, "volume_max": 200.0,
+        "filling_mode": SYMBOL_FILLING_IOC,
+        "trade_stops_level": 12, "spread": 15,
+    },
+    "BTCUSDm": {
+        "digits": 2, "point": 0.01, "price": 64_000.00,
+        "trade_tick_size": 0.01, "trade_tick_value": 0.01,
+        "trade_contract_size": 1.0,
+        "volume_min": 0.01, "volume_step": 0.01, "volume_max": 10.0,
+        "filling_mode": SYMBOL_FILLING_IOC,
+        "trade_stops_level": 0, "spread": 3500,
+    },
+    "XAUUSDm": {
+        "digits": 3, "point": 0.001, "price": 2_400.000,
+        "trade_tick_size": 0.001, "trade_tick_value": 0.1,
+        "trade_contract_size": 100.0,
+        "volume_min": 0.01, "volume_step": 0.01, "volume_max": 50.0,
+        "filling_mode": SYMBOL_FILLING_FOK,
+        "trade_stops_level": 35, "spread": 28,
+    },
+}
+
+# Anything not listed above behaves like the original fake: a generic
+# 5-digit instrument.
+DEFAULT_SPEC = {
+    "digits": 5, "point": 0.00001, "price": 1.10000,
+    "trade_tick_size": 0.00001, "trade_tick_value": 1.0,
+    "trade_contract_size": 100_000.0,
+    "volume_min": 0.01, "volume_step": 0.01, "volume_max": 100.0,
+    "filling_mode": SYMBOL_FILLING_FOK | SYMBOL_FILLING_IOC,
+    "trade_stops_level": 10, "spread": 12,
+}
+
 
 class World:
     def __init__(self):
@@ -64,8 +131,39 @@ class World:
         self.next_ticket = 5_000_000
         self.base_price = 1.1000
 
+        # ---- Phase 1: broker facts ----
+
+        # Server clock offset from UTC, in minutes. Non-zero values
+        # exercise the timezone handling that Phase 0 §2.2 flagged.
+        self.server_offset_minutes = 0
+
+        # Makes one offset sample disagree, to test the stability
+        # assertion rather than only the happy path.
+        self.unstable_offset = False
+
+        self.margin_mode = ACCOUNT_MARGIN_MODE_RETAIL_HEDGING
+        self.login = 123456
+        self.server = "FakeBroker-Demo"
+        self.company = "Fake Broker Ltd"
+        self.leverage = 100
+
+        self.symbol_specs = {k: dict(v) for k, v in SYMBOL_SPECS.items()}
+
+        # Symbols the broker does not offer at all -> symbol_select
+        # returns False, which is one explanation for "only one symbol
+        # ever trades".
+        self.unknown_symbols = set()
+
+        self._offset_calls = 0
+
 
 world = World()
+
+
+def spec_for(symbol):
+    """Broker specification for one symbol."""
+
+    return world.symbol_specs.get(symbol, DEFAULT_SPEC)
 
 
 def _ticket():
@@ -118,7 +216,16 @@ def last_error():
 
 
 def terminal_info():
-    return _Namespace(connected=world.initialized) if world.initialized else None
+    if not world.initialized:
+        return None
+
+    return _Namespace(
+        connected=True,
+        build=4260,
+        name="FakeTerminal",
+        company=world.company,
+        trade_allowed=True,
+    )
 
 
 def account_info():
@@ -133,8 +240,14 @@ def account_info():
         margin=0.0,
         margin_free=world.balance,
         profit=floating,
-        login=123456,
+        login=world.login,
         currency="USD",
+
+        # Phase 1 broker facts
+        server=world.server,
+        company=world.company,
+        leverage=world.leverage,
+        margin_mode=world.margin_mode,
     )
 
 
@@ -143,47 +256,109 @@ def account_info():
 # ---------------------------------------------------------------------
 
 def symbol_select(symbol, enable=True):
-    return True
+    """False for a symbol this broker does not offer."""
+
+    return symbol not in world.unknown_symbols
 
 
 def symbol_info(symbol):
+    if symbol in world.unknown_symbols:
+        return None
+
+    spec = spec_for(symbol)
+
     return _Namespace(
         name=symbol,
-        digits=5,
-        point=0.00001,
         visible=True,
+
+        digits=spec["digits"],
+        point=spec["point"],
+        trade_contract_size=spec["trade_contract_size"],
+
+        trade_tick_size=spec["trade_tick_size"],
+        trade_tick_value=spec["trade_tick_value"],
+        trade_tick_value_profit=spec["trade_tick_value"],
+        trade_tick_value_loss=spec["trade_tick_value"],
+
+        volume_min=spec["volume_min"],
+        volume_step=spec["volume_step"],
+        volume_max=spec["volume_max"],
+
+        filling_mode=spec["filling_mode"],
+
+        trade_stops_level=spec["trade_stops_level"],
+        trade_freeze_level=0,
+        spread=spec["spread"],
+        trade_mode=4,
+
+        swap_long=-2.5,
+        swap_short=0.8,
     )
 
 
 def symbol_info_tick(symbol):
+    if symbol in world.unknown_symbols:
+        return None
+
+    spec = spec_for(symbol)
+
+    price = spec["price"]
+
+    # tick.time is SERVER time, not UTC. Offsetting it here is what
+    # lets the offset measurement be tested honestly.
+    server_now = time.time() + world.server_offset_minutes * 60
+
+    if world.unstable_offset:
+        world._offset_calls += 1
+
+        # Every third sample disagrees by an hour.
+        if world._offset_calls % 3 == 0:
+            server_now += 3600
+
     return _Namespace(
-        bid=world.base_price,
-        ask=world.base_price + 0.00010,
-        time=int(time.time()),
+        bid=price,
+        ask=price + spec["point"] * spec["spread"],
+        time=int(server_now),
     )
 
 
 def copy_rates_from_pos(symbol, timeframe, start, count):
-    """Deterministic synthetic candles with a mild uptrend."""
+    """
+    Deterministic synthetic candles with a mild uptrend.
+
+    Bar times are SERVER time (offset from UTC), matching real MT5.
+    `start` is honoured, so requesting position 1 really does skip the
+    forming bar - which is what Phase 4 needs to verify.
+    """
 
     import numpy as np
 
-    now = int(time.time())
-
     step = 86400 if timeframe == TIMEFRAME_D1 else 3600
+
+    server_now = int(time.time() + world.server_offset_minutes * 60)
+
+    # Align to the bar grid, then step back by `start` bars so
+    # start=1 returns only closed bars.
+    latest = server_now - (server_now % step) - start * step
+
+    spec = spec_for(symbol)
+
+    base = spec["price"] if symbol in world.symbol_specs else world.base_price
+
+    scale = base * 0.0004
 
     rows = []
 
     for i in range(count):
-        drift = i * 0.0004
+        drift = i * scale
 
-        open_price = world.base_price + drift
-        close_price = open_price + 0.0002
-        high_price = close_price + 0.0003
-        low_price = open_price - 0.0003
+        open_price = base + drift
+        close_price = open_price + scale * 0.5
+        high_price = close_price + scale * 0.75
+        low_price = open_price - scale * 0.75
 
         rows.append((
-            now - (count - i) * step,
+            latest - (count - 1 - i) * step,
             open_price,
             high_price,
             low_price,
@@ -209,6 +384,28 @@ def copy_rates_from_pos(symbol, timeframe, start, count):
 # Trading
 # ---------------------------------------------------------------------
 
+def _filling_supported(symbol, type_filling):
+    """
+    Does the broker accept this filling mode for this symbol?
+
+    Real MT5 answers with retcode 10030 (Invalid fill) when it does
+    not. The old code hardcoded IOC, so on a FOK-only symbol EVERY
+    order failed here - silently, forever. Modelling the rejection is
+    what makes the Phase 1 fix testable.
+    """
+
+    mask = spec_for(symbol)["filling_mode"]
+
+    if type_filling == ORDER_FILLING_FOK:
+        return bool(mask & SYMBOL_FILLING_FOK)
+
+    if type_filling == ORDER_FILLING_IOC:
+        return bool(mask & SYMBOL_FILLING_IOC)
+
+    # RETURN is accepted by everything in this model.
+    return True
+
+
 def order_send(request):
     if world.order_send_returns_none:
         return None
@@ -217,6 +414,19 @@ def order_send(request):
         return _Result(
             retcode=TRADE_RETCODE_REJECT,
             comment="Fake rejection",
+            order=0,
+            deal=0,
+            volume=0.0,
+            price=0.0,
+            request_id=1,
+        )
+
+    if not _filling_supported(
+        request["symbol"], request.get("type_filling", ORDER_FILLING_IOC)
+    ):
+        return _Result(
+            retcode=TRADE_RETCODE_INVALID_FILL,
+            comment="Unsupported filling mode",
             order=0,
             deal=0,
             volume=0.0,

@@ -12,6 +12,114 @@
 
 
 -- ---------------------------------------------------------------------
+-- Strategy versions (Phase 1).
+--
+-- The strategy IS the prompt + model + temperature + params. Without a
+-- version, two runs on different days are not comparable and no
+-- experiment can be attributed. Every decisions row references one.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS strategy_versions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT    NOT NULL,
+
+    strategy_id       TEXT    NOT NULL,        -- 'llm-mtf'
+    version           TEXT    NOT NULL,        -- '1.0.0'
+
+    -- sha256 of the rendered system prompt + the user-prompt template
+    prompt_hash       TEXT    NOT NULL,
+
+    model_alias       TEXT,                    -- 'deepseek-chat'
+    temperature       REAL,
+    params_json       TEXT,                    -- frozen config snapshot
+
+    parent_version_id INTEGER REFERENCES strategy_versions(id),
+
+    UNIQUE (strategy_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_hash
+    ON strategy_versions(prompt_hash);
+
+
+-- ---------------------------------------------------------------------
+-- Broker profile, one row per MT5 account (Phase 1).
+--
+-- These are facts MEASURED from the terminal, never assumed. The server
+-- UTC offset in particular is what every session label and (later) the
+-- news blackout depends on.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS broker_profiles (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at            TEXT    NOT NULL,
+    updated_at            TEXT,
+
+    account_id            INTEGER NOT NULL UNIQUE,
+    server                TEXT,
+    company               TEXT,
+    currency              TEXT,
+    leverage              INTEGER,
+
+    -- mt5.account_info().margin_mode: 0 netting, 2 hedging
+    margin_mode           INTEGER,
+    margin_mode_label     TEXT,
+
+    -- round((tick.time - time.time()) / 1800) * 30, asserted stable
+    server_utc_offset_min INTEGER,
+    offset_samples_json   TEXT,
+    offset_stable         INTEGER,
+
+    trade_allowed         INTEGER,
+    terminal_json         TEXT
+);
+
+
+-- ---------------------------------------------------------------------
+-- Per-symbol broker specification (Phase 1).
+--
+-- Sizing, stop placement, deviation and filling mode are all derived
+-- from these rather than hardcoded.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS symbol_profiles (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at              TEXT    NOT NULL,
+    updated_at              TEXT,
+
+    account_id              INTEGER NOT NULL,
+    symbol                  TEXT    NOT NULL,
+
+    digits                  INTEGER,
+    point                   REAL,
+    contract_size           REAL,
+
+    trade_tick_size         REAL,
+    trade_tick_value        REAL,
+    trade_tick_value_profit REAL,
+    trade_tick_value_loss   REAL,
+
+    volume_min              REAL,
+    volume_step             REAL,
+    volume_max              REAL,
+
+    filling_mode            INTEGER,        -- broker bitmask
+    filling_mode_chosen     TEXT,           -- 'FOK' | 'IOC' | 'RETURN'
+    filling_order_type      INTEGER,        -- mt5.ORDER_FILLING_*
+
+    trade_stops_level       INTEGER,
+    trade_freeze_level      INTEGER,
+    spread                  INTEGER,
+    trade_mode              INTEGER,
+
+    swap_long               REAL,
+    swap_short              REAL,
+
+    UNIQUE (account_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_profiles
+    ON symbol_profiles(account_id, symbol);
+
+
+-- ---------------------------------------------------------------------
 -- AI decisions: one row per DeepSeek analysis, valid or not.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS decisions (
@@ -52,12 +160,18 @@ CREATE TABLE IF NOT EXISTS decisions (
     latency_ms        INTEGER,
     error             TEXT,
 
+    -- reproducibility (Phase 1): which exact strategy produced this
+    prompt_hash         TEXT,
+    temperature         REAL,
+    strategy_version_id INTEGER REFERENCES strategy_versions(id),
+
     trade_id          INTEGER REFERENCES trades(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_created  ON decisions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_decisions_symbol   ON decisions(symbol, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_decisions_trade    ON decisions(trade_id);
+CREATE INDEX IF NOT EXISTS idx_decisions_version  ON decisions(strategy_version_id);
 
 
 -- ---------------------------------------------------------------------

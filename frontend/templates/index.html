@@ -467,6 +467,33 @@
 <script>
 
     // ============================================================
+    // AUTH (Phase 1)
+    //
+    // /api/* requires a bearer token when API_TOKEN is set in .env.
+    // The server injects it into this page, so the dashboard keeps
+    // working with no login step. Empty string = auth disabled.
+    // ============================================================
+
+    const API_TOKEN = "{{ api_token }}";
+
+    function apiFetch(url, options) {
+
+        const settings = Object.assign(
+            { cache: "no-store" },
+            options || {}
+        );
+
+        settings.headers = Object.assign({}, settings.headers || {});
+
+        if (API_TOKEN) {
+            settings.headers["Authorization"] = "Bearer " + API_TOKEN;
+        }
+
+        return fetch(url, settings);
+    }
+
+
+    // ============================================================
     // DOM ELEMENTS
     // ============================================================
 
@@ -1296,8 +1323,8 @@
         try {
 
             const [tradesResponse, equityResponse] = await Promise.all([
-                fetch("/api/history/trades?limit=200", { cache: "no-store" }),
-                fetch("/api/history/equity?limit=500", { cache: "no-store" })
+                apiFetch("/api/history/trades?limit=200", { cache: "no-store" }),
+                apiFetch("/api/history/equity?limit=500", { cache: "no-store" })
             ]);
 
             if (tradesResponse.ok) {
@@ -1354,7 +1381,7 @@
 
         try {
 
-            const response = await fetch(
+            const response = await apiFetch(
                 "/api/analytics",
                 { cache: "no-store" }
             );
@@ -1416,7 +1443,7 @@
 
     async function refreshTrades() {
 
-        const response = await fetch(
+        const response = await apiFetch(
             "/api/history/trades?limit=50",
             { cache: "no-store" }
         );
@@ -1475,7 +1502,7 @@
 
         try {
 
-            const response = await fetch(
+            const response = await apiFetch(
                 "/api/status",
                 {
                     cache: "no-store"
@@ -1585,7 +1612,7 @@
 
             if (pollCount % 10 === 0) {
 
-                const equityResponse = await fetch(
+                const equityResponse = await apiFetch(
                     "/api/history/equity?limit=500",
                     { cache: "no-store" }
                 );
@@ -1633,7 +1660,7 @@
 
         try {
 
-            const response = await fetch(
+            const response = await apiFetch(
                 "/api/control",
                 {
                     method: "POST",
@@ -1729,7 +1756,7 @@
 
             try {
 
-                await fetch(
+                await apiFetch(
                     "/api/control",
                     {
                         method: "POST",

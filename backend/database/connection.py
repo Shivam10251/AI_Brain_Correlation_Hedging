@@ -108,12 +108,81 @@ def close_connection():
 # Initialisation
 # ---------------------------------------------------------------------
 
+# Columns added to tables that already exist in a live database.
+#
+# CREATE TABLE IF NOT EXISTS cannot add a column to a table that is
+# already there, so a database created before a given phase would never
+# gain the new columns. Each entry here is applied with ALTER TABLE ADD
+# COLUMN only when the column is missing.
+#
+# Rules for anything added to this map:
+#   * additive only - never drop, rename or retype a column
+#   * no NOT NULL without a DEFAULT (SQLite rejects it on ADD COLUMN)
+#   * safe to run on every startup, forever
+ADDITIVE_COLUMNS = {
+    # Phase 1 - decision reproducibility
+    "decisions": (
+        ("prompt_hash", "TEXT"),
+        ("temperature", "REAL"),
+        ("strategy_version_id", "INTEGER"),
+    ),
+}
+
+
+def _existing_tables(conn):
+    return {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+
+
+def _existing_columns(conn, table):
+    return {row["name"] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
+def apply_additive_migrations(conn):
+    """
+    Bring an existing database up to the current column set.
+
+    Returns the list of "table.column" strings that were added, so
+    startup can log exactly what changed. Never destructive.
+    """
+
+    added = []
+
+    tables = _existing_tables(conn)
+
+    for table, columns in ADDITIVE_COLUMNS.items():
+
+        if table not in tables:
+            # Fresh database: schema.sql already created it in full.
+            continue
+
+        present = _existing_columns(conn, table)
+
+        for name, column_type in columns:
+
+            if name in present:
+                continue
+
+            conn.execute(
+                f'ALTER TABLE "{table}" ADD COLUMN "{name}" {column_type}'
+            )
+
+            added.append(f"{table}.{name}")
+
+    return added
+
+
 def initialize_database():
     """
-    Create the schema if it does not exist.
+    Create the schema if it does not exist, then apply additive column
+    migrations to a database that predates them.
 
     Safe to call on every startup: every statement in schema.sql is
-    IF NOT EXISTS, so this is idempotent.
+    IF NOT EXISTS, and the migration only ever adds missing columns.
     """
 
     conn = get_connection()
@@ -122,5 +191,10 @@ def initialize_database():
 
     with write_lock:
         conn.executescript(schema_sql)
+
+        added = apply_additive_migrations(conn)
+
+    if added:
+        print(f"Database migrated: added {', '.join(added)}")
 
     return get_db_path()
