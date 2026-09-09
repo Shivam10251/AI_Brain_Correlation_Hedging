@@ -1,7 +1,36 @@
+# Runtime dependencies, pinned (Phase 1).
+#
+# Phase 0 §2.10: these were unpinned, so a fresh install could pick up
+# a breaking release and the failure would look like a code bug. Every
+# version below is the one this code was verified against.
+#
+# MetaTrader5 is Windows-only and is therefore NOT listed here - it is
+# installed separately on the trading host. See requirements-ci.txt for
+# what CI installs, and the note at the bottom of this file.
+
 python-dotenv==1.2.3
-fastapi
-uvicorn[standard]
-MetaTrader5
-pandas
-requests
-Jinja2
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+starlette==1.6.0
+pydantic==2.13.5
+
+Jinja2==3.1.6
+
+pandas==3.0.5
+numpy==2.5.3
+
+requests==2.34.2
+
+
+# ---------------------------------------------------------------------
+# Windows trading host only
+# ---------------------------------------------------------------------
+#
+# The MetaTrader5 package has no macOS or Linux wheel, so listing it
+# here would break `pip install -r requirements.txt` on any dev machine
+# and in CI. Install it explicitly on the machine running the terminal:
+#
+#     pip install MetaTrader5==5.0.4874
+#
+# Tests everywhere run against tests/fake_mt5.py instead.

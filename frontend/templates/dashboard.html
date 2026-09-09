@@ -320,6 +320,29 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// =====================================================================
+// AUTH (Phase 1)
+//
+// The token is injected server-side. The page is only served to a
+// browser on the host running the engine, so handing it the token
+// here is not an escalation - it is how the page authenticates the
+// same requests it was always allowed to make.
+//
+// Empty string means API_TOKEN is unset and the API is open.
+// =====================================================================
+
+const API_TOKEN = "{{ api_token }}";
+
+function authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+
+    if (API_TOKEN) {
+        headers["Authorization"] = "Bearer " + API_TOKEN;
+    }
+
+    return headers;
+}
+
 const VIEW_TITLES = {
     overview: ["Overview", "database health and table summary"],
     tables:   ["Table Explorer", "server-side paged, searchable data grid"],
@@ -340,9 +363,19 @@ function esc(value) {
 }
 
 async function api(path, options) {
-    const response = await fetch(path, Object.assign(
-        { cache: "no-store" }, options || {}
-    ));
+    const settings = Object.assign({ cache: "no-store" }, options || {});
+
+    settings.headers = authHeaders(settings.headers);
+
+    const response = await fetch(path, settings);
+
+    if (response.status === 401) {
+        throw new Error(
+            "401 Unauthorized on " + path +
+            " - API_TOKEN is set but this page did not receive it. " +
+            "Restart the server so the template picks it up."
+        );
+    }
 
     if (!response.ok) {
         throw new Error("HTTP " + response.status + " on " + path);

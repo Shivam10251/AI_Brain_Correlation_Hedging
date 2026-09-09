@@ -1,0 +1,10 @@
+# Test/CI dependencies (Phase 1).
+#
+# Installed on top of requirements.txt. MetaTrader5 is deliberately
+# absent: it is Windows-only, and every test runs against the shim in
+# tests/fake_mt5.py.
+
+-r requirements.txt
+
+pytest==8.4.2
+httpx==0.28.1

@@ -21,10 +21,12 @@ from pydantic import BaseModel
 
 import MetaTrader5 as mt5
 
-from backend import config
+from backend import auth, config
+from backend.ai import versioning
 from backend.core import engine
 from backend.core.engine import bot_state
 from backend.database import analytics, explorer, initialize_database
+from backend.database import repo_meta
 from backend.database import repository as repo
 
 
@@ -55,6 +57,49 @@ async def lifespan(app: FastAPI):
     db_path = initialize_database()
     print(f"Database ready: {db_path}")
 
+    # 1b. Freeze the running strategy (Phase 1).
+    #
+    # Registered BEFORE the loop starts, so the very first decision of
+    # the process already carries a strategy_version_id. An unversioned
+    # prompt edit shows up here as a new row rather than silently
+    # polluting an existing version's trade population.
+    try:
+        version_id = versioning.ensure_registered()
+
+        descriptor = versioning.current_descriptor()
+
+        print(
+            f"Strategy: {descriptor['strategy_id']} v{descriptor['version']} "
+            f"(id={version_id}, prompt {descriptor['prompt_hash'][:12]}, "
+            f"model {descriptor['model_alias']}, "
+            f"temp {descriptor['temperature']})"
+        )
+
+        repo.insert_event(
+            f"Strategy version {descriptor['strategy_id']} "
+            f"v{descriptor['version']} active "
+            f"(prompt_hash {descriptor['prompt_hash'][:12]})",
+            level="INFO",
+            category="STRATEGY",
+            data={"strategy_version_id": version_id, **descriptor},
+        )
+
+    except Exception as error:                      # noqa: BLE001
+        print(f"[ERROR] Strategy registration failed: {error}")
+
+    # 1c. Security posture warning (Phase 1).
+    if not config.AUTH_ENABLED:
+        print(
+            "[WARN] API_TOKEN is not set - /api/* is UNAUTHENTICATED. "
+            "Bind to 127.0.0.1 only, or set API_TOKEN in .env."
+        )
+
+        repo.insert_event(
+            "API_TOKEN is not set; control plane is unauthenticated",
+            level="WARN",
+            category="SECURITY",
+        )
+
     # 2. Restore
     restored = engine.restore_state()
     print(
@@ -72,6 +117,54 @@ async def lifespan(app: FastAPI):
 
     # 3. MT5 (non-fatal - the dashboard must still serve history)
     engine.connect_mt5()
+
+    # 3b. Broker profile (Phase 1).
+    #
+    # Measures the server UTC offset, reads margin mode and captures
+    # every per-symbol specification. Until this runs, the engine is
+    # working from assumptions - which is what Phase 0 §2.2 and §2.6
+    # were about.
+    if bot_state["mt5_connected"]:
+        try:
+            from backend.market import broker_profile
+
+            profile = await asyncio.to_thread(broker_profile.capture)
+
+            if profile.get("available"):
+                bot_state["account_id"] = profile["account_id"]
+                bot_state["server_utc_offset_min"] = (
+                    profile["server_utc_offset_min"]
+                )
+                bot_state["margin_mode"] = profile["margin_mode_label"]
+
+                offset = profile["server_utc_offset_min"]
+
+                print(
+                    f"Broker profile: account {profile['account_id']} on "
+                    f"{profile['server']} · server offset "
+                    f"{'UNKNOWN' if offset is None else f'{offset:+d} min'}"
+                    f"{'' if profile['offset_stable'] else ' (UNSTABLE)'} · "
+                    f"{profile['margin_mode_label']}"
+                )
+
+                for entry in profile["symbols"]:
+                    print(
+                        f"  {entry['symbol']}: filling={entry['filling']} "
+                        f"digits={entry['digits']} "
+                        f"stops_level={entry['stops_level']} "
+                        f"volume_step={entry['volume_step']}"
+                    )
+
+                if profile["unavailable_symbols"]:
+                    print(
+                        f"  [ERROR] unavailable on this broker: "
+                        f"{', '.join(profile['unavailable_symbols'])}"
+                    )
+            else:
+                print(f"[WARN] Broker profile unavailable: {profile.get('error')}")
+
+        except Exception as error:                  # noqa: BLE001
+            print(f"[ERROR] Broker profile capture failed: {error}")
 
     # 4. Reconcile
     if bot_state["mt5_connected"]:
@@ -136,6 +229,31 @@ app = FastAPI(
 
 
 # ============================================================
+# AUTH (Phase 1)
+#
+# Every /api/* route except /api/health requires the bearer token
+# from .env when API_TOKEN is set. Enforced as middleware so a route
+# added in a later phase inherits protection instead of relying on
+# somebody remembering a decorator.
+#
+# The HTML pages stay open and receive the token server-side, so both
+# dashboards keep working with no login step.
+# ============================================================
+
+@app.middleware("http")
+async def enforce_api_token(request: Request, call_next):
+
+    if auth.path_requires_token(request.url.path):
+
+        rejection = auth.check_request(request)
+
+        if rejection is not None:
+            return rejection
+
+    return await call_next(request)
+
+
+# ============================================================
 # REQUEST MODEL
 # ============================================================
 
@@ -153,7 +271,13 @@ async def home(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"request": request}
+        context={
+            "request": request,
+            # Phase 1: the page authenticates its own fetch() calls.
+            # Safe because the page is served to a browser on this
+            # host - anyone who can load it is already here.
+            "api_token": auth.token_for_template(),
+        },
     )
 
 
@@ -167,7 +291,10 @@ async def quant_db_dashboard(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"request": request},
+        context={
+            "request": request,
+            "api_token": auth.token_for_template(),
+        },
     )
 
 
@@ -250,6 +377,60 @@ async def db_query(request: QueryRequest):
 @app.get("/api/db/quant")
 async def db_quant():
     return await asyncio.to_thread(explorer.quant_dashboard)
+
+
+# ============================================================
+# API: PROVENANCE (Phase 1)
+#
+# What strategy is running, and what the broker actually said. Both
+# are read from the database, so they reflect what was recorded rather
+# than what the code assumes.
+# ============================================================
+
+@app.get("/api/meta/strategy")
+async def meta_strategy():
+    """The running strategy plus every version ever registered."""
+
+    def _read():
+        descriptor = versioning.current_descriptor()
+
+        return {
+            "current": descriptor,
+            "registered": repo_meta.get_strategy_versions(limit=50),
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+@app.get("/api/meta/broker")
+async def meta_broker():
+    """
+    Measured broker facts: server UTC offset, margin mode, and the
+    per-symbol specification used for filling mode and deviation.
+    """
+
+    def _read():
+        profiles = repo_meta.get_broker_profiles()
+
+        return {
+            "accounts": [
+                {
+                    **profile,
+                    "offset_samples": repo_meta.decode_json(
+                        profile.get("offset_samples_json"), []
+                    ),
+                    "terminal": repo_meta.decode_json(
+                        profile.get("terminal_json"), {}
+                    ),
+                    "symbols": repo_meta.get_symbol_profiles(
+                        profile["account_id"]
+                    ),
+                }
+                for profile in profiles
+            ],
+        }
+
+    return await asyncio.to_thread(_read)
 
 
 # ============================================================
@@ -468,6 +649,11 @@ async def get_positions():
 
 @app.get("/api/health")
 async def health():
+    """
+    Liveness probe. Deliberately unauthenticated so an external
+    watchdog can poll it without holding the token.
+    """
+
     return {
         "status": "ok",
         "mt5_connected": bot_state["mt5_connected"],
@@ -477,4 +663,11 @@ async def health():
         "last_error": bot_state["last_error"],
         "memory_enabled": config.MEMORY_ENABLED,
         "news_enabled": config.NEWS_ENABLED,
+
+        # Phase 1 provenance
+        "auth_enabled": config.AUTH_ENABLED,
+        "account_id": bot_state.get("account_id"),
+        "server_utc_offset_min": bot_state.get("server_utc_offset_min"),
+        "margin_mode": bot_state.get("margin_mode"),
+        "strategy_version_id": bot_state.get("strategy_version_id"),
     }

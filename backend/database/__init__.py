@@ -16,10 +16,11 @@ from .connection import (
     initialize_database,
 )
 
-from . import analytics, repository
+from . import analytics, repo_meta, repository
 
 __all__ = [
     "analytics",
+    "repo_meta",
     "repository",
     "initialize_database",
     "get_connection",

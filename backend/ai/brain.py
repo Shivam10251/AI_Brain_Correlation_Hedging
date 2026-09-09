@@ -20,7 +20,7 @@ import time
 import requests
 
 from backend import config
-from backend.ai import memory
+from backend.ai import memory, versioning
 from backend.ai.prompts import build_system_prompt, build_user_prompt
 from backend.market import news
 
@@ -141,6 +141,32 @@ def validate_response(parsed):
 # RESULT SHAPES
 # =====================================================================
 
+def _provenance():
+    """
+    Which exact strategy produced this decision (Phase 1).
+
+    Resolved on EVERY return path, including the failure paths: a
+    decision that failed still belongs to a version, and excluding
+    failures would bias any later calibration study.
+
+    Never raises - a database problem must not turn into a missing
+    decision.
+    """
+
+    try:
+        return {
+            "prompt_hash": versioning.compute_prompt_hash(),
+            "temperature": config.DEEPSEEK_TEMPERATURE,
+            "strategy_version_id": versioning.ensure_registered(),
+        }
+    except Exception:                               # noqa: BLE001
+        return {
+            "prompt_hash": None,
+            "temperature": config.DEEPSEEK_TEMPERATURE,
+            "strategy_version_id": None,
+        }
+
+
 def _base_result(symbol, features=None, news_context=None,
                  experience_ids=None):
     """
@@ -153,7 +179,13 @@ def _base_result(symbol, features=None, news_context=None,
     return {
         "symbol": symbol,
         "timeframe": TIMEFRAME_LABEL,
+
+        # The requested model alias. Overwritten on success with the
+        # model the API actually served, which is the one that matters
+        # when 'deepseek-chat' silently moves underneath us (§2.9).
         "model": config.DEEPSEEK_MODEL,
+
+        **_provenance(),
 
         # legacy keys
         "signal": "HOLD",
@@ -352,8 +384,15 @@ def get_ai_decision(market_data, symbol):
 
     decision = _base_result(symbol, features, news_context, experience_ids)
 
+    # The alias we asked for is not necessarily what served the
+    # request. DEEPSEEK_MODEL is a moving pointer (Phase 0 §2.9), so
+    # record the response's own model field when it gives one -
+    # otherwise two runs weeks apart look identical and are not.
+    served_model = result.get("model") if isinstance(result, dict) else None
+
     decision.update({
         "status": "ok",
+        "model": served_model or config.DEEPSEEK_MODEL,
 
         # legacy keys, kept in sync
         "signal": normalised["signal"],

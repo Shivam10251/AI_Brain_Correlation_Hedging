@@ -3,6 +3,57 @@ import pandas as pd
 
 
 # =====================================================================
+# SERVER TIME
+#
+# Phase 0 §2.2: bar times were being labelled UTC. MT5 returns them in
+# the BROKER SERVER's timezone, which is commonly UTC+2/+3 with DST.
+# Every session label was therefore off by that offset, and the news
+# engine could not be aligned at all.
+#
+# The offset is MEASURED at startup (see market/broker_profile.py) and
+# read from bot_state here. When it has not been measured, it is None -
+# meaning UNKNOWN, which is recorded honestly rather than silently
+# assumed to be zero.
+# =====================================================================
+
+def server_utc_offset_min():
+    """
+    The measured broker offset in minutes, or None when unknown.
+
+    Read from runtime state rather than the database so the hot path
+    stays allocation-free.
+    """
+
+    try:
+        from backend.core.runtime import bot_state
+
+        return bot_state.get("server_utc_offset_min")
+
+    except Exception:                               # noqa: BLE001
+        return None
+
+
+def to_utc(server_series, offset_minutes):
+    """
+    Convert broker-server bar times to true UTC.
+
+    `server_series` holds epoch seconds as MT5 reports them, which are
+    server-local wall clock stamped as if they were UTC. Subtracting
+    the offset recovers real UTC.
+
+    With an unknown offset the series is returned unchanged and the
+    caller records that the timestamps are server time, not UTC.
+    """
+
+    times = pd.to_datetime(server_series, unit="s", utc=True)
+
+    if not offset_minutes:
+        return times
+
+    return times - pd.Timedelta(minutes=offset_minutes)
+
+
+# =====================================================================
 # FEATURE COMPUTATION
 #
 # These are deterministic, engine-side measurements of the market.
@@ -258,15 +309,30 @@ def _session(timestamp):
     return "off_hours"
 
 
-def compute_features(daily_df, hourly_df, tick, symbol_info):
+def compute_features(daily_df, hourly_df, tick, symbol_info,
+                     offset_minutes=None):
     """
     Bundle every derived feature into one flat dict.
 
     Stored in market_states.features_json and summarised into the AI
     prompt.
+
+    `offset_minutes` is the measured broker UTC offset. The session
+    label is computed from TRUE UTC, so it means the same thing on a
+    UTC+3 broker as on a UTC+0 one. None means the offset has not been
+    measured; the label is then computed from server time and flagged
+    as such in `session_basis`.
     """
 
     last_close = float(hourly_df["close"].iloc[-1])
+
+    # The newest H1 bar's timestamp, on both clocks.
+    last_bar_server = hourly_df["time"].iloc[-1]
+
+    if offset_minutes:
+        last_bar_utc = last_bar_server - pd.Timedelta(minutes=offset_minutes)
+    else:
+        last_bar_utc = last_bar_server
 
     atr = _average_true_range(hourly_df)
 
@@ -308,7 +374,15 @@ def compute_features(daily_df, hourly_df, tick, symbol_info):
         "market_structure": _market_structure(hourly_df),
         "market_regime": _market_regime(daily_df, hourly_df),
 
-        "session": _session(hourly_df["time"].iloc[-1]),
+        # Session is derived from UTC, not from raw server time.
+        "session": _session(last_bar_utc),
+        "session_basis": "utc" if offset_minutes is not None else "server_time",
+
+        # Both clocks kept, so a stored row can always be re-derived
+        # even if the offset is corrected later.
+        "bar_time_server": str(last_bar_server),
+        "bar_time_utc": str(last_bar_utc),
+        "server_utc_offset_min": offset_minutes,
 
         "digits": symbol_info.digits if symbol_info else None,
         "point": symbol_info.point if symbol_info else None,
@@ -383,6 +457,9 @@ def fetch_multi_timeframe_data(symbol):
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Could not select symbol: {symbol}")
 
+    # Measured once at startup; None when it has not been measured.
+    offset_minutes = server_utc_offset_min()
+
     # ---------------------------------------------------------
     # 1. Fetch Daily data - last 10 candles
     # ---------------------------------------------------------
@@ -400,15 +477,17 @@ def fetch_multi_timeframe_data(symbol):
 
     daily_df = pd.DataFrame(daily_rates)
 
-    # Convert Unix timestamp to readable UTC datetime
-    daily_df["time"] = pd.to_datetime(
-        daily_df["time"],
-        unit="s",
-        utc=True
+    # Bar times are BROKER SERVER time. Keep the raw server clock for
+    # the CSV the model reads (so it matches the terminal an operator
+    # is looking at) and derive UTC separately for labels.
+    daily_df["time_server"] = pd.to_datetime(
+        daily_df["time"], unit="s", utc=True
     )
 
+    daily_df["time"] = to_utc(daily_rates["time"], offset_minutes)
+
     # Convert to raw CSV text
-    daily_csv = daily_df.to_csv(index=False)
+    daily_csv = daily_df.drop(columns=["time_server"]).to_csv(index=False)
 
     # ---------------------------------------------------------
     # 2. Fetch H1 data - last 24 candles
@@ -427,14 +506,14 @@ def fetch_multi_timeframe_data(symbol):
 
     hourly_df = pd.DataFrame(hourly_rates)
 
-    hourly_df["time"] = pd.to_datetime(
-        hourly_df["time"],
-        unit="s",
-        utc=True
+    hourly_df["time_server"] = pd.to_datetime(
+        hourly_df["time"], unit="s", utc=True
     )
 
+    hourly_df["time"] = to_utc(hourly_rates["time"], offset_minutes)
+
     # Convert to raw CSV text
-    hourly_csv = hourly_df.to_csv(index=False)
+    hourly_csv = hourly_df.drop(columns=["time_server"]).to_csv(index=False)
 
     # ---------------------------------------------------------
     # 3. Current account state
@@ -464,7 +543,8 @@ def fetch_multi_timeframe_data(symbol):
         daily_df,
         hourly_df,
         tick,
-        symbol_info
+        symbol_info,
+        offset_minutes=offset_minutes,
     )
 
     # ---------------------------------------------------------
@@ -479,4 +559,5 @@ def fetch_multi_timeframe_data(symbol):
         "bid_price": tick.bid,
         "features": features,
         "account": account,
+        "server_utc_offset_min": offset_minutes,
     }
