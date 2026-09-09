@@ -153,6 +153,20 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
 
 # ---------------------------------------------------------------------
+# Risk profile (Phase 3)
+#
+# Which rulebook this process runs under. The YAML lives in
+# Specs/risk/<id>.yaml.
+#
+# Deliberately NOT inferred from the account number: pointing the demo
+# profile at a funded account has to be a typed decision, not an
+# accident of which terminal happened to be open.
+# ---------------------------------------------------------------------
+
+RISK_PROFILE = os.getenv("RISK_PROFILE", "mt5-demo")
+
+
+# ---------------------------------------------------------------------
 # API security (Phase 1)
 #
 # Phase 0 §2.1: POST /api/control started and stopped the engine, and

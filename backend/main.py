@@ -28,6 +28,9 @@ from backend.core.engine import bot_state
 from backend.database import analytics, explorer, initialize_database
 from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
+from backend.risk import engine as risk_engine
+from backend.risk import killswitch
+from backend.risk import profiles as risk_profiles
 
 
 # Resolved from this file rather than the working directory, so the app
@@ -86,6 +89,56 @@ async def lifespan(app: FastAPI):
 
     except Exception as error:                      # noqa: BLE001
         print(f"[ERROR] Strategy registration failed: {error}")
+
+    # 1d. Risk profile (Phase 3).
+    #
+    # Loaded and validated BEFORE the loop starts. A profile whose
+    # limits contradict each other is a hard failure: the engine would
+    # otherwise gate real money against rules nobody can satisfy.
+    try:
+        profile = risk_profiles.load()
+
+        profile_row_id = risk_profiles.ensure_registered(profile)
+
+        bot_state["risk_profile"] = profile["profile_id"]
+
+        print(
+            f"Risk profile: {profile['profile_id']} "
+            f"(id={profile_row_id}, checksum {profile['_checksum'][:12]}) "
+            f"· score>={profile['min_ai_score']} "
+            f"· risk {profile['max_risk_per_trade_pct']}% "
+            f"· daily {profile['daily_loss_limit_pct']}% "
+            f"· {profile['max_losses_per_day']} losses/day "
+            f"· cap {profile['max_open_positions_per_symbol']}/symbol"
+        )
+
+        repo.insert_event(
+            f"Risk profile {profile['profile_id']} active "
+            f"(checksum {profile['_checksum'][:12]})",
+            level="INFO",
+            category="RISK",
+            data={"risk_profile_id": profile_row_id, "profile_id": profile["profile_id"]},
+        )
+
+    except Exception as error:                      # noqa: BLE001
+        print(f"[ERROR] Risk profile failed to load: {error}")
+
+        repo.insert_event(
+            f"Risk profile failed to load: {error}. The engine will "
+            f"refuse every trade until this is fixed.",
+            level="ERROR",
+            category="RISK",
+        )
+
+    # 1e. Kill switch state (Phase 3) - durable across restarts.
+    switch = killswitch.get_state()
+
+    if switch.get("active"):
+        print(
+            f"[WARN] KILL SWITCH IS ENGAGED ({switch.get('reason')}, set "
+            f"{switch.get('set_at')}). No new orders will be opened. "
+            f"Clear it with POST /api/risk/halt {{\"action\":\"resume\"}}."
+        )
 
     # 1c. Security posture warning (Phase 1).
     if not config.AUTH_ENABLED:
@@ -397,6 +450,131 @@ async def meta_strategy():
         return {
             "current": descriptor,
             "registered": repo_meta.get_strategy_versions(limit=50),
+        }
+
+    return await asyncio.to_thread(_read)
+
+
+# ============================================================
+# API: RISK ENGINE (Phase 3)
+# ============================================================
+
+class HaltRequest(BaseModel):
+    action: str = "halt"                 # 'halt' | 'resume'
+    reason: str | None = None
+    flatten: bool = False
+
+
+@app.post("/api/risk/halt")
+async def risk_halt(request: HaltRequest):
+    """
+    Engage or clear the kill switch.
+
+    Durable: it survives a restart on purpose. A halt that evaporates
+    when the process crashes is not a halt, and a crash-loop is exactly
+    when you most want the bot to stay stopped.
+    """
+
+    action = (request.action or "halt").lower()
+
+    if action not in {"halt", "resume"}:
+        return {"status": "error", "message": "action must be halt or resume"}
+
+    def _apply():
+        if action == "halt":
+            return killswitch.engage(request.reason, source="api")
+
+        return killswitch.clear(request.reason, source="api")
+
+    state = await asyncio.to_thread(_apply)
+
+    flattened = None
+
+    if action == "halt" and request.flatten:
+        # Phase 5 owns the close path. Until it exists, say so plainly
+        # rather than reporting a flatten that did not happen.
+        flattened = {
+            "status": "unavailable",
+            "message": (
+                "flatten=true requires the Phase 5 close path. New orders "
+                "are blocked; existing positions were NOT closed."
+            ),
+        }
+
+    return {
+        "status": "success",
+        "kill_switch": state,
+        "flatten": flattened,
+    }
+
+
+@app.get("/api/risk/state")
+async def risk_state():
+    """
+    The live risk picture: active profile, kill switch, and where today
+    stands against each money limit.
+    """
+
+    def _read():
+        try:
+            profile = risk_profiles.load()
+        except Exception as error:                  # noqa: BLE001
+            return {
+                "status": "error",
+                "message": f"Risk profile failed to load: {error}",
+                "kill_switch": killswitch.get_state(),
+            }
+
+        account_id = bot_state.get("account_id")
+
+        account = {}
+
+        if bot_state["mt5_connected"]:
+            info = mt5.account_info()
+
+            if info:
+                account = {
+                    "equity": info.equity,
+                    "balance": info.balance,
+                    "floating_pnl": info.profit,
+                }
+
+        day = {}
+
+        if account_id is not None:
+            day = repo_ledger.day_summary(
+                account_id,
+                repo_ledger.trading_day(
+                    bot_state.get("server_utc_offset_min")
+                ),
+                floating_pnl=account.get("floating_pnl") or 0.0,
+            )
+
+        allowance = risk_profiles.daily_loss_allowance(profile, day, account)
+
+        return {
+            "status": "ok",
+            "profile": {
+                k: v for k, v in profile.items() if not k.startswith("_")
+            },
+            "profile_checksum": profile["_checksum"],
+            "kill_switch": killswitch.get_state(),
+            "account": account,
+            "today": day,
+            "limits": {
+                "risk_budget_per_trade": risk_profiles.risk_budget(
+                    profile, account
+                ),
+                "daily_loss_allowance": allowance,
+                "daily_loss_remaining": (
+                    None if allowance is None
+                    else round(allowance + float(day.get("exposure") or 0.0), 2)
+                ),
+                "account_floor": risk_profiles.effective_floor(profile),
+                "losses_today": day.get("loss_count"),
+                "max_losses_per_day": profile.get("max_losses_per_day"),
+            },
+            "checks": list(risk_engine.CHECK_NAMES),
         }
 
     return await asyncio.to_thread(_read)

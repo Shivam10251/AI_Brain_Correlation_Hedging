@@ -127,6 +127,9 @@ ADDITIVE_COLUMNS = {
         ("temperature", "REAL"),
         ("strategy_version_id", "INTEGER"),
         ("account_id", "INTEGER"),
+        # Phase 3 - risk engine verdict
+        ("risk_checks_json", "TEXT"),
+        ("risk_profile_id", "INTEGER"),
     ),
 
     # Phase 2 - money risk and account attribution

@@ -21,6 +21,10 @@ DECISION_COLUMNS = (
     "latency_ms", "error",
     # Phase 1 - reproducibility
     "prompt_hash", "temperature", "strategy_version_id",
+    # Phase 2 - account attribution
+    "account_id",
+    # Phase 3 - risk verdict
+    "risk_checks_json", "risk_profile_id",
     "trade_id",
 )
 
@@ -69,6 +73,11 @@ def insert_decision(decision):
         "temperature": decision.get("temperature"),
         "strategy_version_id": decision.get("strategy_version_id"),
         "account_id": decision.get("account_id") or current_account_id(),
+
+        # Phase 3: the full risk verdict, so a refusal explains itself
+        # from the row without needing the logs.
+        "risk_checks_json": _json(decision.get("risk_checks")),
+        "risk_profile_id": decision.get("risk_profile_id"),
 
         "trade_id": decision.get("trade_id"),
     }

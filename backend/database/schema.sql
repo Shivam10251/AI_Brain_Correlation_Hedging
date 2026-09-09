@@ -120,6 +120,28 @@ CREATE INDEX IF NOT EXISTS idx_symbol_profiles
 
 
 -- ---------------------------------------------------------------------
+-- Risk profiles (Phase 3): the per-account rulebook, snapshotted.
+--
+-- The YAML under Specs/risk/ is the editable source; this table is the
+-- immutable record of what was in force when a decision was made. An
+-- edited profile registers a NEW row (new checksum) rather than
+-- mutating the old one, so historical decisions keep their limits.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS risk_profiles (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT    NOT NULL,
+
+    profile_id   TEXT    NOT NULL,        -- 'mt5-demo' | 'the5ers-100k'
+    name         TEXT,
+    checksum     TEXT    NOT NULL,        -- sha256 of the limits
+    source_path  TEXT,
+    params_json  TEXT    NOT NULL,
+
+    UNIQUE (profile_id, checksum)
+);
+
+
+-- ---------------------------------------------------------------------
 -- AI decisions: one row per DeepSeek analysis, valid or not.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS decisions (
@@ -167,6 +189,11 @@ CREATE TABLE IF NOT EXISTS decisions (
 
     -- which MT5 account (Phase 2)
     account_id          INTEGER,
+
+    -- Risk Engine verdict (Phase 3): all 14 checks, in order, with
+    -- the outcome of each. A refusal must be explainable from the row.
+    risk_checks_json    TEXT,
+    risk_profile_id     INTEGER REFERENCES risk_profiles(id),
 
     trade_id          INTEGER REFERENCES trades(id)
 );

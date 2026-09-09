@@ -1,13 +1,14 @@
 """
 Risk layer.
 
-Phase 2 adds `money`: converting a stop distance into a currency figure
-using the broker's own tick specification.
-
-Phase 3 adds `engine`: the module with sole authority over whether an
-order may be sent.
+  money       stop distance -> account currency (Phase 2)
+  profiles    the per-account rulebook, loaded from Specs/risk/ (Phase 3)
+  exposure    net correlated dollar-beta, in R (Phase 3)
+  killswitch  the durable halt flag (Phase 3)
+  engine      the fourteen checks; sole authority over orders (Phase 3)
 """
 
-from . import money
+from . import exposure, killswitch, money, profiles
+from . import engine
 
-__all__ = ["money"]
+__all__ = ["engine", "exposure", "killswitch", "money", "profiles"]

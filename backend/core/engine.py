@@ -28,7 +28,9 @@ from backend.ai.brain import get_ai_decision
 from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
 from backend.market import news
-from backend.risk import money
+from backend.risk import engine as risk_engine
+from backend.risk import killswitch, money
+from backend.risk import profiles as risk_profiles
 from backend.market.data_engine import fetch_multi_timeframe_data
 from backend.market.execution import execute_trade, new_client_order_id
 
@@ -54,55 +56,87 @@ _last_equity_snapshot_at = None
 # RISK GATE
 # =====================================================================
 
-def apply_risk_checks(symbol, decision):
+def build_risk_context(symbol, decision, market_data, risk):
+    """
+    Gather everything the fourteen checks need (Phase 3).
+
+    Assembled here, evaluated there. Keeping the gathering out of the
+    engine is what lets a test construct a violating state directly
+    instead of driving the whole loop into it.
+    """
+
+    features = market_data.get("features") or {}
+
+    account = market_data.get("account") or {}
+
+    profile = risk_profiles.load()
+
+    account_id = bot_state.get("account_id")
+
+    day = repo_ledger.day_summary(
+        account_id,
+        repo_ledger.trading_day(bot_state.get("server_utc_offset_min")),
+        floating_pnl=account.get("floating_pnl") or 0.0,
+    ) if account_id is not None else {}
+
+    return risk_engine.RiskContext(
+        symbol=symbol,
+        signal=decision.get("ai_signal") or "HOLD",
+        decision=decision,
+        profile=profile,
+        account=account,
+        day=day,
+        risk_amount=risk.get("risk_amount"),
+        stop_distance=risk.get("stop_distance_price"),
+        spread=features.get("spread"),
+        open_trades=repo.get_open_trades(),
+        mt5_connected=bot_state["mt5_connected"],
+        kill_switch=killswitch.get_state(),
+        news=None,                       # Phase 7 supplies the feed
+    )
+
+
+def apply_risk_checks(symbol, decision, market_data=None, risk=None):
     """
     Decide what the engine actually does with the AI's signal.
 
-    Returns (final_decision, override_reason). override_reason is None
-    when the engine is doing exactly what the AI asked.
+    Phase 3: this is now a thin adapter over backend.risk.engine, which
+    holds sole authority. It returns the same (final_decision,
+    override_reason) pair the loop has always consumed, and
+    additionally stashes the full verdict on `decision` so it is
+    persisted with the row.
 
-    Both gates default to disabled in config, so with a stock .env this
-    function is a pass-through and live behaviour is unchanged.
+    The previous implementation was five inline conditions with two of
+    the five disabled by default - Phase 0 ranked that as weakness #2.
     """
 
     ai_signal = decision.get("ai_signal", "HOLD")
 
-    # 1. An unusable AI response can never become an order.
-    if decision.get("status") != "ok":
-        return "HOLD", (
-            f"AI response unusable (status={decision.get('status')}): "
-            f"{decision.get('error')}"
-        )
-
-    if ai_signal not in {"BUY", "SELL"}:
+    # A non-trade signal never reaches the engine: there is nothing to
+    # authorise, and recording fourteen refusals for a HOLD would bury
+    # the real refusals in noise.
+    if decision.get("status") == "ok" and ai_signal not in {"BUY", "SELL"}:
         return ai_signal, None
 
-    # 2. MT5 must be reachable.
-    if not bot_state["mt5_connected"]:
-        return "HOLD", "MT5 is not connected"
+    context = build_risk_context(
+        symbol, decision, market_data or {}, risk or {}
+    )
 
-    # 3. Optional score floor.
-    if config.MIN_SCORE_TO_TRADE > 0:
-        score = decision.get("ai_score") or 0
+    verdict = risk_engine.evaluate(context)
 
-        if score < config.MIN_SCORE_TO_TRADE:
-            return "HOLD", (
-                f"AI score {score} below MIN_SCORE_TO_TRADE "
-                f"({config.MIN_SCORE_TO_TRADE})"
-            )
+    decision["risk_checks"] = verdict.as_dict()
 
-    # 4. Optional per-symbol position cap.
-    if config.MAX_OPEN_POSITIONS_PER_SYMBOL > 0:
-        open_count = repo.count_open_trades_for_symbol(symbol)
+    try:
+        decision["risk_profile_id"] = risk_profiles.ensure_registered(
+            context.profile
+        )
+    except Exception:                               # noqa: BLE001
+        decision["risk_profile_id"] = None
 
-        if open_count >= config.MAX_OPEN_POSITIONS_PER_SYMBOL:
-            return "HOLD", (
-                f"{open_count} open position(s) on {symbol} at the "
-                f"MAX_OPEN_POSITIONS_PER_SYMBOL limit "
-                f"({config.MAX_OPEN_POSITIONS_PER_SYMBOL})"
-            )
+    if verdict.allow:
+        return ai_signal, None
 
-    return ai_signal, None
+    return "HOLD", verdict.reason
 
 
 # =====================================================================
@@ -215,9 +249,23 @@ async def process_symbol(symbol, cycle_id):
 
     # -------------------------------------------------------------
     # 3. Risk gate
+    #
+    # The trade is PRICED before it is judged: checks 10-14 are money
+    # limits, and they cannot evaluate a trade whose risk is unknown.
     # -------------------------------------------------------------
 
-    final_decision, override_reason = apply_risk_checks(symbol, decision)
+    features = market_data.get("features") or {}
+
+    planned_risk = plan_risk(
+        symbol,
+        decision.get("ai_signal") or "HOLD",
+        features,
+        config.LOT_SIZE,
+    ) if decision.get("ai_signal") in {"BUY", "SELL"} else {}
+
+    final_decision, override_reason = apply_risk_checks(
+        symbol, decision, market_data, planned_risk
+    )
 
     decision["final_decision"] = final_decision
     decision["override_reason"] = override_reason
@@ -261,7 +309,9 @@ async def process_symbol(symbol, cycle_id):
         )
         return decision
 
-    await execute_and_record(symbol, final_decision, decision, market_data)
+    await execute_and_record(
+        symbol, final_decision, decision, market_data, planned_risk
+    )
 
     return decision
 
@@ -312,7 +362,8 @@ def plan_risk(symbol, signal, features, volume):
     return described
 
 
-async def execute_and_record(symbol, signal, decision, market_data):
+async def execute_and_record(symbol, signal, decision, market_data,
+                             planned_risk=None):
     """
     Write the intent, send the order, then record the outcome.
 
@@ -327,7 +378,9 @@ async def execute_and_record(symbol, signal, decision, market_data):
     client_order_id = new_client_order_id()
 
     # Phase 2: money risk is known before the order exists, not after.
-    risk = plan_risk(symbol, signal, features, config.LOT_SIZE)
+    # Reuse the figure the risk engine judged, so the row records the
+    # trade that was actually authorised rather than a re-derivation.
+    risk = planned_risk or plan_risk(symbol, signal, features, config.LOT_SIZE)
 
     if risk.get("risk_amount") is None:
         repo.insert_event(
