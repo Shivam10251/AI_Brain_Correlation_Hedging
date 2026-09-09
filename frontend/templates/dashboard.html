@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Quant DB Dashboard</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        graphite: "#0B120E",
+                        lime: "#75E063"
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --graphite: #0B120E;
+            --lime: #75E063;
+            --panel: #0F1712;
+            --line: rgba(117, 224, 99, 0.12);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            background: var(--graphite);
+            color: #e5e7eb;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+                         BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 13px;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+                         Consolas, "Liberation Mono", monospace;
+        }
+
+        .panel {
+            background: rgba(15, 23, 18, 0.72);
+            border: 1px solid var(--line);
+            -webkit-backdrop-filter: blur(14px);
+            backdrop-filter: blur(14px);
+        }
+
+        /* ---------- scrollbars ---------- */
+        .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .scroll::-webkit-scrollbar-track { background: transparent; }
+        .scroll::-webkit-scrollbar-thumb {
+            background: rgba(117, 224, 99, 0.18);
+            border-radius: 999px;
+        }
+        .scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(117, 224, 99, 0.32);
+        }
+
+        /* ---------- data grid ---------- */
+        .grid-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+
+        .grid-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #101a13;
+            border-bottom: 1px solid var(--line);
+            padding: 8px 12px;
+            text-align: left;
+            font-size: 10px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #7d8a82;
+            white-space: nowrap;
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .grid-table thead th:hover { color: var(--lime); }
+
+        .grid-table tbody td {
+            padding: 7px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            white-space: nowrap;
+            max-width: 340px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 12px;
+        }
+
+        .grid-table tbody tr { cursor: pointer; }
+        .grid-table tbody tr:hover { background: rgba(117, 224, 99, 0.05); }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 12px;
+            color: #8b978f;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .nav-item:hover { background: rgba(255,255,255,0.03); color: #d1d5db; }
+
+        .nav-item.active {
+            background: rgba(117, 224, 99, 0.09);
+            color: var(--lime);
+            box-shadow: inset 0 0 0 1px rgba(117, 224, 99, 0.2);
+        }
+
+        .chip {
+            display: inline-block;
+            padding: 1px 7px;
+            border-radius: 6px;
+            font-size: 9px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            border: 1px solid rgba(255,255,255,0.07);
+            background: rgba(255,255,255,0.03);
+            color: #94a39a;
+        }
+
+        .chip-pk { border-color: rgba(251,191,36,0.3); color: #fbbf24;
+                   background: rgba(251,191,36,0.07); }
+        .chip-fk { border-color: rgba(96,165,250,0.3); color: #60a5fa;
+                   background: rgba(96,165,250,0.07); }
+        .chip-idx { border-color: rgba(167,139,250,0.3); color: #a78bfa;
+                    background: rgba(167,139,250,0.07); }
+
+        .spin {
+            width: 16px; height: 16px;
+            border: 2px solid rgba(117,224,99,0.15);
+            border-top-color: var(--lime);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        textarea, input, select { outline: none; }
+
+        .erd-box { cursor: pointer; }
+        .erd-box:hover rect { stroke: var(--lime); }
+    </style>
+</head>
+
+<body class="h-screen overflow-hidden">
+
+<div class="flex h-screen">
+
+    <!-- ===================================================== -->
+    <!-- SIDEBAR                                               -->
+    <!-- ===================================================== -->
+
+    <aside class="flex w-[248px] shrink-0 flex-col border-r border-white/5 bg-[#0A0F0C]">
+
+        <div class="flex items-center gap-3 border-b border-white/5 px-5 py-4">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg border border-lime/20 bg-lime/5">
+                <div class="h-2 w-2 rounded-full bg-lime shadow-[0_0_10px_#75E063]"></div>
+            </div>
+            <div>
+                <div class="text-[11px] font-semibold tracking-[0.18em] text-lime">QUANT DB</div>
+                <div class="text-[9px] uppercase tracking-[0.2em] text-zinc-600">Research Terminal</div>
+            </div>
+        </div>
+
+        <nav class="scroll flex-1 overflow-y-auto px-3 py-4">
+
+            <div class="mb-1 px-3 text-[9px] uppercase tracking-[0.2em] text-zinc-600">Sections</div>
+
+            <div class="nav-item active" data-view="overview">
+                <span class="text-base leading-none">▤</span> Overview
+            </div>
+            <div class="nav-item" data-view="tables">
+                <span class="text-base leading-none">▦</span> Table Explorer
+            </div>
+            <div class="nav-item" data-view="schema">
+                <span class="text-base leading-none">◈</span> Schema &amp; ERD
+            </div>
+            <div class="nav-item" data-view="charts">
+                <span class="text-base leading-none">◠</span> Quant Charts
+            </div>
+            <div class="nav-item" data-view="sql">
+                <span class="text-base leading-none">›_</span> SQL Console
+            </div>
+
+            <div class="mb-1 mt-6 px-3 text-[9px] uppercase tracking-[0.2em] text-zinc-600">Tables</div>
+            <div id="tableNav" class="space-y-0.5">
+                <div class="px-3 py-2 text-[11px] text-zinc-600">Loading…</div>
+            </div>
+
+        </nav>
+
+        <div class="border-t border-white/5 px-4 py-3">
+            <a href="/" class="nav-item">
+                <span class="text-base leading-none">←</span> Trading Engine
+            </a>
+            <div id="dbPath" class="mono mt-2 truncate px-3 text-[9px] text-zinc-700" title=""></div>
+        </div>
+
+    </aside>
+
+
+    <!-- ===================================================== -->
+    <!-- MAIN                                                  -->
+    <!-- ===================================================== -->
+
+    <main class="flex min-w-0 flex-1 flex-col">
+
+        <header class="flex shrink-0 items-center justify-between border-b border-white/5 px-6 py-3">
+
+            <div class="flex items-baseline gap-3">
+                <h1 id="viewTitle" class="text-sm font-medium text-zinc-200">Overview</h1>
+                <span id="viewSubtitle" class="text-[11px] text-zinc-600"></span>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <div id="dbStatus" class="chip">connecting</div>
+                <button id="globalRefresh" type="button"
+                        class="rounded-lg border border-lime/20 bg-lime/5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-lime transition hover:bg-lime/10">
+                    Refresh
+                </button>
+            </div>
+
+        </header>
+
+        <div id="content" class="scroll min-h-0 flex-1 overflow-y-auto">
+
+            <!-- ============ OVERVIEW ============ -->
+            <section id="view-overview" class="p-6"></section>
+
+            <!-- ============ TABLE EXPLORER ============ -->
+            <section id="view-tables" class="hidden h-full flex-col"></section>
+
+            <!-- ============ SCHEMA ============ -->
+            <section id="view-schema" class="hidden p-6"></section>
+
+            <!-- ============ CHARTS ============ -->
+            <section id="view-charts" class="hidden p-6"></section>
+
+            <!-- ============ SQL ============ -->
+            <section id="view-sql" class="hidden p-6"></section>
+
+        </div>
+
+    </main>
+
+</div>
+
+
+<!-- ========================================================= -->
+<!-- ROW DETAIL MODAL                                          -->
+<!-- ========================================================= -->
+
+<div id="rowModal"
+     class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-6 backdrop-blur-sm">
+
+    <div class="panel scroll flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl">
+
+        <div class="flex shrink-0 items-center justify-between border-b border-white/5 px-6 py-4">
+            <div>
+                <div class="text-[9px] uppercase tracking-[0.2em] text-zinc-600">Row detail</div>
+                <div id="modalTitle" class="mono mt-0.5 text-sm text-zinc-200"></div>
+            </div>
+            <button onclick="closeModal()" type="button"
+                    class="rounded-lg border border-white/10 px-3 py-1.5 text-[10px] uppercase tracking-widest text-zinc-400 transition hover:border-white/20 hover:text-zinc-200">
+                Close
+            </button>
+        </div>
+
+        <div id="modalBody" class="scroll min-h-0 flex-1 overflow-y-auto px-6 py-5"></div>
+
+    </div>
+
+</div>
+
+
+<script>
+"use strict";
+
+// =====================================================================
+// STATE
+// =====================================================================
+
+const state = {
+    meta: null,
+    tables: [],
+    schema: null,
+    quant: null,
+
+    view: "overview",
+
+    // table explorer
+    table: null,
+    page: 0,
+    pageSize: 50,
+    sortCol: null,
+    sortDir: "asc",
+    search: "",
+    columns: [],
+    hidden: new Set(),
+    rows: [],
+
+    charts: {}
+};
+
+const $ = (id) => document.getElementById(id);
+
+const VIEW_TITLES = {
+    overview: ["Overview", "database health and table summary"],
+    tables:   ["Table Explorer", "server-side paged, searchable data grid"],
+    schema:   ["Schema & ERD", "columns, keys, indexes and relationships"],
+    charts:   ["Quant Charts", "derived from the columns actually present"],
+    sql:      ["SQL Console", "read-only — SELECT / WITH / EXPLAIN only"]
+};
+
+
+// =====================================================================
+// HELPERS
+// =====================================================================
+
+function esc(value) {
+    const d = document.createElement("div");
+    d.textContent = value === null || value === undefined ? "" : String(value);
+    return d.innerHTML;
+}
+
+async function api(path, options) {
+    const response = await fetch(path, Object.assign(
+        { cache: "no-store" }, options || {}
+    ));
+
+    if (!response.ok) {
+        throw new Error("HTTP " + response.status + " on " + path);
+    }
+
+    return response.json();
+}
+
+function fmtBytes(bytes) {
+    if (!bytes && bytes !== 0) return "—";
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    let n = Number(bytes);
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+    return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + units[i];
+}
+
+function fmtNum(n) {
+    if (n === null || n === undefined || n === "") return "—";
+    const v = Number(n);
+    if (!isFinite(v)) return esc(n);
+    return v.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
+function fmtTime(value) {
+    if (!value) return "—";
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    return d.toLocaleString([], {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+}
+
+function isTimestampCol(name) {
+    return /(_at$|^time$|^date$|timestamp|datetime)/i.test(name);
+}
+
+function looksLikeJson(value) {
+    if (typeof value !== "string") return false;
+    const t = value.trim();
+    return (t.startsWith("{") && t.endsWith("}")) ||
+           (t.startsWith("[") && t.endsWith("]"));
+}
+
+function prettyJson(value) {
+    try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+    } catch (error) {
+        return value;
+    }
+}
+
+/** Cell rendering for the data grid. */
+function fmtCell(value, columnName) {
+    if (value === null || value === undefined) {
+        return '<span class="text-zinc-700 italic">null</span>';
+    }
+
+    if (typeof value === "number") {
+        return '<span class="num">' + fmtNum(value) + "</span>";
+    }
+
+    if (isTimestampCol(columnName)) {
+        return '<span class="mono text-zinc-400">' + esc(fmtTime(value)) + "</span>";
+    }
+
+    if (looksLikeJson(value)) {
+        return '<span class="chip">json</span> <span class="mono text-zinc-500">' +
+               esc(String(value).slice(0, 60)) + "…</span>";
+    }
+
+    const text = String(value);
+
+    if (/^(BUY|WIN|EXECUTED|ok|INFO)$/i.test(text)) {
+        return '<span class="text-lime">' + esc(text) + "</span>";
+    }
+    if (/^(SELL|LOSS|REJECTED|FAILED|ERROR|ORPHANED)$/i.test(text)) {
+        return '<span class="text-red-400">' + esc(text) + "</span>";
+    }
+    if (/^(PENDING|WARN|HOLD)$/i.test(text)) {
+        return '<span class="text-amber-400">' + esc(text) + "</span>";
+    }
+
+    return esc(text.length > 120 ? text.slice(0, 120) + "…" : text);
+}
+
+function pnlClass(value) {
+    const v = Number(value);
+    if (!isFinite(v) || v === 0) return "text-zinc-400";
+    return v > 0 ? "text-lime" : "text-red-400";
+}
+
+function loading(message) {
+    return '<div class="flex items-center gap-3 px-6 py-16 text-zinc-600">' +
+           '<div class="spin"></div><span class="text-xs">' +
+           esc(message || "Loading…") + "</span></div>";
+}
+
+function emptyState(title, detail) {
+    return '<div class="flex flex-col items-center justify-center px-6 py-20 text-center">' +
+           '<div class="mb-2 text-2xl text-zinc-700">◌</div>' +
+           '<div class="text-xs text-zinc-400">' + esc(title) + "</div>" +
+           '<div class="mt-1 max-w-md text-[11px] leading-5 text-zinc-600">' +
+           esc(detail || "") + "</div></div>";
+}
+
+function errorState(message) {
+    return '<div class="m-6 rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-4">' +
+           '<div class="text-[10px] uppercase tracking-[0.2em] text-red-400">Error</div>' +
+           '<div class="mono mt-1 text-xs leading-5 text-red-300">' + esc(message) + "</div></div>";
+}
+
+
+// =====================================================================
+// NAVIGATION
+// =====================================================================
+
+function showView(name) {
+    state.view = name;
+
+    ["overview", "tables", "schema", "charts", "sql"].forEach(v => {
+        const el = $("view-" + v);
+        if (v === name) {
+            el.classList.remove("hidden");
+            if (v === "tables") el.classList.add("flex");
+        } else {
+            el.classList.add("hidden");
+            el.classList.remove("flex");
+        }
+    });
+
+    document.querySelectorAll(".nav-item[data-view]").forEach(item => {
+        item.classList.toggle("active", item.dataset.view === name);
+    });
+
+    const [title, subtitle] = VIEW_TITLES[name] || [name, ""];
+    $("viewTitle").textContent = title;
+    $("viewSubtitle").textContent = subtitle;
+
+    if (name === "schema" && !state.schema) loadSchema();
+    if (name === "charts" && !state.quant) loadCharts();
+}
+
+document.querySelectorAll(".nav-item[data-view]").forEach(item => {
+    item.addEventListener("click", () => showView(item.dataset.view));
+});
+
+
+// =====================================================================
+// OVERVIEW
+// =====================================================================
+
+function statCard(label, value, hint) {
+    return '' +
+        '<div class="panel rounded-xl px-5 py-4">' +
+            '<div class="text-[9px] uppercase tracking-[0.2em] text-zinc-600">' + esc(label) + "</div>" +
+            '<div class="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">' + value + "</div>" +
+            (hint ? '<div class="mt-1 text-[10px] text-zinc-600">' + esc(hint) + "</div>" : "") +
+        "</div>";
+}
+
+async function loadOverview() {
+    const host = $("view-overview");
+    host.innerHTML = loading("Reading database metadata…");
+
+    let meta;
+
+    try {
+        meta = await api("/api/db/meta");
+    } catch (error) {
+        host.innerHTML = errorState(error.message);
+        return;
+    }
+
+    state.meta = meta;
+
+    $("dbPath").textContent = meta.path || "";
+    $("dbPath").title = meta.path || "";
+
+    if (!meta.available) {
+        $("dbStatus").textContent = "no database";
+        $("dbStatus").className = "chip";
+
+        host.innerHTML = emptyState(
+            "Database file not found yet",
+            (meta.message || "") + " Expected at: " + (meta.path || "")
+        );
+        return;
+    }
+
+    $("dbStatus").textContent = "connected · read-only";
+    $("dbStatus").className = "chip chip-pk";
+
+    const cards = [
+        statCard("Tables", fmtNum(meta.table_count),
+                 meta.view_count ? meta.view_count + " view(s)" : "sqlite tables"),
+        statCard("Total rows", fmtNum(meta.total_rows), "across every table"),
+        statCard("Database size", fmtBytes(meta.size_bytes),
+                 "on disk " + fmtBytes(meta.file_bytes) + " incl. WAL"),
+        statCard("Last updated",
+                 '<span class="text-base">' + esc(fmtTime(meta.last_updated)) + "</span>",
+                 "newest timestamp in any table"),
+        statCard("SQLite", esc(meta.sqlite_version),
+                 "journal: " + esc(meta.journal_mode)),
+        statCard("Page layout", fmtNum(meta.page_count) + " pg",
+                 fmtBytes(meta.page_size) + " per page")
+    ].join("");
+
+    const tableCards = (meta.tables || []).map(t => {
+        const empty = t.row_count === 0;
+        return '' +
+        '<div class="panel cursor-pointer rounded-xl px-5 py-4 transition hover:border-lime/30"' +
+        '     onclick="openTable(\'' + esc(t.name) + '\')">' +
+            '<div class="flex items-center justify-between">' +
+                '<div class="mono text-xs font-medium text-zinc-200">' + esc(t.name) + "</div>" +
+                '<span class="chip">' + esc(t.type) + "</span>" +
+            "</div>" +
+            '<div class="mt-3 text-xl font-semibold ' +
+                (empty ? "text-zinc-600" : "text-lime") + '">' +
+                fmtNum(t.row_count) +
+                '<span class="ml-1 text-[10px] uppercase tracking-widest text-zinc-600">rows</span>' +
+            "</div>" +
+            '<div class="mt-1 text-[10px] text-zinc-600">' +
+                (t.last_updated ? "updated " + esc(fmtTime(t.last_updated)) : "no timestamp column") +
+            "</div>" +
+        "</div>";
+    }).join("");
+
+    host.innerHTML =
+        '<div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">' + cards + "</div>" +
+        '<div class="mb-3 mt-8 text-[9px] uppercase tracking-[0.2em] text-zinc-600">Tables</div>' +
+        '<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">' +
+            tableCards +
+        "</div>" +
+        '<div class="mt-8 rounded-xl border border-white/5 bg-white/[0.015] px-5 py-4 text-[11px] leading-5 text-zinc-500">' +
+            "This dashboard opens its own SQLite connection with " +
+            '<span class="mono text-zinc-400">PRAGMA query_only = ON</span>. ' +
+            "It can never write, migrate or drop anything in the trading database, " +
+            "and it reads through WAL so the engine can keep writing while you browse." +
+        "</div>";
+}
+
+
+// =====================================================================
+// SIDEBAR TABLE LIST
+// =====================================================================
+
+async function loadTableList() {
+    const nav = $("tableNav");
+
+    try {
+        const payload = await api("/api/db/tables");
+        state.tables = payload.tables || [];
+    } catch (error) {
+        nav.innerHTML = '<div class="px-3 py-2 text-[11px] text-red-400">unavailable</div>';
+        return;
+    }
+
+    if (state.tables.length === 0) {
+        nav.innerHTML = '<div class="px-3 py-2 text-[11px] text-zinc-600">no tables</div>';
+        return;
+    }
+
+    nav.innerHTML = state.tables.map(t =>
+        '<div class="nav-item" data-table="' + esc(t.name) + '">' +
+            '<span class="text-zinc-700">▸</span>' +
+            '<span class="mono truncate">' + esc(t.name) + "</span>" +
+        "</div>"
+    ).join("");
+
+    nav.querySelectorAll("[data-table]").forEach(item => {
+        item.addEventListener("click", () => openTable(item.dataset.table));
+    });
+}
+
+function openTable(name) {
+    state.table = name;
+    state.page = 0;
+    state.sortCol = null;
+    state.sortDir = "asc";
+    state.search = "";
+    state.hidden = new Set();
+
+    showView("tables");
+
+    document.querySelectorAll("#tableNav .nav-item").forEach(item => {
+        item.classList.toggle("active", item.dataset.table === name);
+    });
+
+    renderTableShell();
+    loadTableData();
+}
+
+
+// =====================================================================
+// TABLE EXPLORER
+// =====================================================================
+
+function renderTableShell() {
+    $("view-tables").innerHTML =
+        '<div class="shrink-0 border-b border-white/5 px-6 py-4">' +
+
+            '<div class="flex flex-wrap items-center justify-between gap-3">' +
+                "<div>" +
+                    '<div class="mono text-sm text-zinc-100">' + esc(state.table) + "</div>" +
+                    '<div id="rowCountLabel" class="mt-0.5 text-[10px] uppercase tracking-widest text-zinc-600">…</div>' +
+                "</div>" +
+
+                '<div class="flex flex-wrap items-center gap-2">' +
+                    '<input id="tableSearch" type="text" placeholder="Search all columns…" ' +
+                    '       class="w-56 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-lime/30">' +
+
+                    '<select id="pageSizeSelect" ' +
+                    '        class="rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5 text-xs text-zinc-300 focus:border-lime/30">' +
+                        '<option value="25">25</option>' +
+                        '<option value="50" selected>50</option>' +
+                        '<option value="100">100</option>' +
+                        '<option value="250">250</option>' +
+                        '<option value="500">500</option>' +
+                    "</select>" +
+
+                    '<button id="colsButton" ' +
+                    '        class="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[10px] uppercase tracking-widest text-zinc-300 transition hover:border-lime/25">' +
+                        "Columns" +
+                    "</button>" +
+
+                    '<button id="tableRefresh" ' +
+                    '        class="rounded-lg border border-lime/20 bg-lime/5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-lime transition hover:bg-lime/10">' +
+                        "Refresh" +
+                    "</button>" +
+                "</div>" +
+            "</div>" +
+
+            '<div id="colsPanel" class="mt-3 hidden flex-wrap gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-3"></div>' +
+
+        "</div>" +
+
+        '<div id="gridHost" class="scroll min-h-0 flex-1 overflow-auto"></div>' +
+
+        '<div id="pager" class="flex shrink-0 items-center justify-between border-t border-white/5 px-6 py-3"></div>';
+
+    let debounce;
+
+    $("tableSearch").addEventListener("input", (e) => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+            state.search = e.target.value;
+            state.page = 0;
+            loadTableData();
+        }, 300);
+    });
+
+    $("pageSizeSelect").addEventListener("change", (e) => {
+        state.pageSize = Number(e.target.value);
+        state.page = 0;
+        loadTableData();
+    });
+
+    $("colsButton").addEventListener("click", () => {
+        $("colsPanel").classList.toggle("hidden");
+        $("colsPanel").classList.toggle("flex");
+    });
+
+    $("tableRefresh").addEventListener("click", () => loadTableData());
+}
+
+async function loadTableData() {
+    const host = $("gridHost");
+    host.innerHTML = loading("Querying " + state.table + "…");
+
+    const params = new URLSearchParams({
+        limit: String(state.pageSize),
+        offset: String(state.page * state.pageSize),
+        order_dir: state.sortDir
+    });
+
+    if (state.sortCol) params.set("order_by", state.sortCol);
+    if (state.search) params.set("search", state.search);
+
+    let payload;
+
+    try {
+        payload = await api("/api/db/table/" + encodeURIComponent(state.table) +
+                            "?" + params.toString());
+    } catch (error) {
+        host.innerHTML = errorState(error.message);
+        return;
+    }
+
+    if (payload.status === "error") {
+        host.innerHTML = errorState(payload.message);
+        return;
+    }
+
+    state.columns = payload.columns;
+    state.rows = payload.rows;
+
+    $("rowCountLabel").textContent =
+        fmtNum(payload.total) + " rows" +
+        (state.search ? " matching “" + state.search + "”" : "") +
+        " · " + payload.columns.length + " columns";
+
+    renderColumnToggles();
+    renderGrid(payload);
+    renderPager(payload);
+}
+
+function renderColumnToggles() {
+    $("colsPanel").innerHTML = state.columns.map(c => {
+        const on = !state.hidden.has(c.name);
+        return '<label class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] ' +
+               (on ? "border-lime/25 bg-lime/5 text-lime" : "border-white/8 bg-white/[0.02] text-zinc-500") + '">' +
+               '<input type="checkbox" class="hidden" data-col="' + esc(c.name) + '"' +
+               (on ? " checked" : "") + ">" +
+               '<span class="mono">' + esc(c.name) + "</span></label>";
+    }).join("");
+
+    $("colsPanel").querySelectorAll("[data-col]").forEach(input => {
+        input.addEventListener("change", () => {
+            const name = input.dataset.col;
+            if (state.hidden.has(name)) state.hidden.delete(name);
+            else state.hidden.add(name);
+            renderColumnToggles();
+            renderGrid({ columns: state.columns, rows: state.rows });
+        });
+    });
+}
+
+function renderGrid(payload) {
+    const host = $("gridHost");
+
+    const columns = payload.columns.filter(c => !state.hidden.has(c.name));
+
+    if (payload.rows.length === 0) {
+        host.innerHTML = emptyState(
+            "No rows",
+            state.search
+                ? "Nothing in this table matches your search."
+                : "This table is empty. It fills up once the trading engine runs."
+        );
+        return;
+    }
+
+    const head = columns.map(c => {
+        const active = state.sortCol === c.name;
+        const arrow = active ? (state.sortDir === "asc" ? " ↑" : " ↓") : "";
+        return '<th data-sort="' + esc(c.name) + '" ' +
+               (active ? 'style="color:var(--lime)"' : "") + ">" +
+               esc(c.name) +
+               (c.primary_key ? ' <span class="chip chip-pk">pk</span>' : "") +
+               '<span class="ml-1 text-zinc-700">' + esc(c.type) + "</span>" +
+               arrow + "</th>";
+    }).join("");
+
+    const body = payload.rows.map((row, index) =>
+        '<tr data-row="' + index + '">' +
+        columns.map(c => "<td>" + fmtCell(row[c.name], c.name) + "</td>").join("") +
+        "</tr>"
+    ).join("");
+
+    host.innerHTML =
+        '<table class="grid-table mono"><thead><tr>' + head +
+        "</tr></thead><tbody>" + body + "</tbody></table>";
+
+    host.querySelectorAll("th[data-sort]").forEach(th => {
+        th.addEventListener("click", () => {
+            const name = th.dataset.sort;
+            if (state.sortCol === name) {
+                state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+            } else {
+                state.sortCol = name;
+                state.sortDir = "asc";
+            }
+            state.page = 0;
+            loadTableData();
+        });
+    });
+
+    host.querySelectorAll("tr[data-row]").forEach(tr => {
+        tr.addEventListener("click", () => {
+            openRowModal(payload.rows[Number(tr.dataset.row)]);
+        });
+    });
+}
+
+function renderPager(payload) {
+    const from = payload.total === 0 ? 0 : payload.offset + 1;
+    const to = payload.offset + payload.returned;
+    const pages = Math.max(1, Math.ceil(payload.total / payload.limit));
+    const current = Math.floor(payload.offset / payload.limit) + 1;
+
+    $("pager").innerHTML =
+        '<div class="text-[11px] text-zinc-600">' +
+            "Showing " + fmtNum(from) + "–" + fmtNum(to) + " of " + fmtNum(payload.total) +
+            " · page " + current + " / " + pages +
+        "</div>" +
+        '<div class="flex gap-2">' +
+            pagerButton("« First", current === 1, 0) +
+            pagerButton("‹ Prev", current === 1, state.page - 1) +
+            pagerButton("Next ›", current >= pages, state.page + 1) +
+            pagerButton("Last »", current >= pages, pages - 1) +
+        "</div>";
+
+    $("pager").querySelectorAll("[data-page]").forEach(button => {
+        button.addEventListener("click", () => {
+            state.page = Number(button.dataset.page);
+            loadTableData();
+            $("gridHost").scrollTop = 0;
+        });
+    });
+}
+
+function pagerButton(label, disabled, page) {
+    if (disabled) {
+        return '<span class="rounded-lg border border-white/5 px-3 py-1.5 text-[10px] uppercase tracking-widest text-zinc-700">' +
+               label + "</span>";
+    }
+    return '<button data-page="' + page + '" ' +
+           'class="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[10px] uppercase tracking-widest text-zinc-300 transition hover:border-lime/25 hover:text-lime">' +
+           label + "</button>";
+}
+
+
+// =====================================================================
+// ROW DETAIL MODAL
+// =====================================================================
+
+function openRowModal(row) {
+    const keyColumn = (state.columns.find(c => c.primary_key) || {}).name;
+    const identity = keyColumn ? keyColumn + " = " + row[keyColumn] : (state.table || "row");
+
+    $("modalTitle").textContent = (state.table || "") + "  ·  " + identity;
+
+    $("modalBody").innerHTML = Object.keys(row).map(key => {
+        const value = row[key];
+
+        let rendered;
+
+        if (value === null || value === undefined) {
+            rendered = '<span class="text-zinc-700 italic">null</span>';
+        } else if (looksLikeJson(value)) {
+            rendered = '<pre class="scroll mono mt-1 max-h-72 overflow-auto rounded-lg ' +
+                       'border border-white/5 bg-black/40 p-3 text-[11px] leading-5 text-zinc-300">' +
+                       esc(prettyJson(value)) + "</pre>";
+        } else if (isTimestampCol(key)) {
+            rendered = '<span class="mono text-zinc-200">' + esc(fmtTime(value)) +
+                       '</span> <span class="mono text-[10px] text-zinc-600">' + esc(value) + "</span>";
+        } else if (typeof value === "number") {
+            rendered = '<span class="mono text-zinc-200">' + fmtNum(value) + "</span>";
+        } else if (String(value).length > 160) {
+            rendered = '<div class="mt-1 whitespace-pre-wrap rounded-lg border border-white/5 ' +
+                       'bg-black/30 p-3 text-[12px] leading-6 text-zinc-300">' + esc(value) + "</div>";
+        } else {
+            rendered = '<span class="text-zinc-200">' + esc(value) + "</span>";
+        }
+
+        return '<div class="border-b border-white/5 py-3">' +
+                   '<div class="mono text-[10px] uppercase tracking-widest text-zinc-600">' +
+                       esc(key) + "</div>" +
+                   '<div class="mt-1 text-xs">' + rendered + "</div>" +
+               "</div>";
+    }).join("");
+
+    $("rowModal").classList.remove("hidden");
+    $("rowModal").classList.add("flex");
+}
+
+function closeModal() {
+    $("rowModal").classList.add("hidden");
+    $("rowModal").classList.remove("flex");
+}
+
+$("rowModal").addEventListener("click", (e) => {
+    if (e.target === $("rowModal")) closeModal();
+});
+
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+});
+
+
+// =====================================================================
+// SCHEMA + ERD
+// =====================================================================
+
+async function loadSchema() {
+    const host = $("view-schema");
+    host.innerHTML = loading("Reading schema…");
+
+    let payload;
+
+    try {
+        payload = await api("/api/db/schema");
+    } catch (error) {
+        host.innerHTML = errorState(error.message);
+        return;
+    }
+
+    if (!payload.available || !payload.schema.length) {
+        host.innerHTML = emptyState("No schema", "The database file does not exist yet.");
+        return;
+    }
+
+    state.schema = payload.schema;
+
+    const relationships = [];
+
+    state.schema.forEach(t => {
+        (t.foreign_keys || []).forEach(fk => {
+            relationships.push({
+                from: t.name, fromCol: fk.from,
+                to: fk.to_table, toCol: fk.to_column || "id"
+            });
+        });
+    });
+
+    const cards = state.schema.map(t => {
+        const fkCols = new Set((t.foreign_keys || []).map(fk => fk.from));
+        const idxCols = new Set();
+        (t.indexes || []).forEach(i => i.columns.forEach(c => idxCols.add(c)));
+
+        const rows = t.columns.map(c =>
+            "<tr>" +
+                '<td class="py-1.5 pr-3 mono text-[11px] text-zinc-200">' + esc(c.name) + "</td>" +
+                '<td class="py-1.5 pr-3 mono text-[10px] text-zinc-500">' +
+                    esc(c.type || "—") + "</td>" +
+                '<td class="py-1.5 pr-2 text-right">' +
+                    (c.primary_key ? '<span class="chip chip-pk">pk</span> ' : "") +
+                    (fkCols.has(c.name) ? '<span class="chip chip-fk">fk</span> ' : "") +
+                    (idxCols.has(c.name) ? '<span class="chip chip-idx">idx</span> ' : "") +
+                    (c.not_null ? '<span class="chip">not null</span>' : "") +
+                "</td>" +
+            "</tr>"
+        ).join("");
+
+        const fks = (t.foreign_keys || []).map(fk =>
+            '<div class="mono text-[10px] text-blue-300">' +
+            esc(fk.from) + " → " + esc(fk.to_table) + "." + esc(fk.to_column || "id") +
+            "</div>"
+        ).join("");
+
+        const indexes = (t.indexes || []).map(i =>
+            '<div class="mono text-[10px] text-violet-300">' +
+            esc(i.name) + " (" + i.columns.map(esc).join(", ") + ")" +
+            (i.unique ? " · unique" : "") + "</div>"
+        ).join("");
+
+        return '<div class="panel rounded-xl p-5">' +
+            '<div class="flex items-center justify-between">' +
+                '<div class="mono text-xs font-semibold text-lime">' + esc(t.name) + "</div>" +
+                '<div class="text-[10px] text-zinc-600">' + fmtNum(t.row_count) + " rows</div>" +
+            "</div>" +
+            '<table class="mt-3 w-full">' + rows + "</table>" +
+            (fks ? '<div class="mt-3 border-t border-white/5 pt-3">' +
+                   '<div class="mb-1 text-[9px] uppercase tracking-widest text-zinc-600">Foreign keys</div>' +
+                   fks + "</div>" : "") +
+            (indexes ? '<div class="mt-3 border-t border-white/5 pt-3">' +
+                       '<div class="mb-1 text-[9px] uppercase tracking-widest text-zinc-600">Indexes</div>' +
+                       indexes + "</div>" : "") +
+        "</div>";
+    }).join("");
+
+    host.innerHTML =
+        '<div class="panel mb-6 rounded-xl p-5">' +
+            '<div class="mb-4 text-[9px] uppercase tracking-[0.2em] text-zinc-600">' +
+                "Entity relationships" +
+            "</div>" +
+            '<div id="erdHost" class="scroll overflow-x-auto"></div>' +
+        "</div>" +
+        '<div class="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">' + cards + "</div>";
+
+    drawErd(state.schema, relationships);
+}
+
+function drawErd(schema, relationships) {
+    const host = $("erdHost");
+
+    const BOX_W = 186;
+    const BOX_H = 58;
+    const GAP_X = 118;
+    const GAP_Y = 62;
+    const PER_ROW = 3;
+
+    // Lay related tables out next to each other, so a foreign-key line
+    // never has to cut straight through an unrelated box.
+    const degree = {};
+    relationships.forEach(rel => {
+        degree[rel.from] = (degree[rel.from] || 0) + 1;
+        degree[rel.to] = (degree[rel.to] || 0) + 1;
+    });
+
+    const ordered = schema.slice().sort((a, b) =>
+        (degree[b.name] || 0) - (degree[a.name] || 0) ||
+        a.name.localeCompare(b.name)
+    );
+
+    const positions = {};
+
+    ordered.forEach((t, i) => {
+        positions[t.name] = {
+            x: 24 + (i % PER_ROW) * (BOX_W + GAP_X),
+            y: 24 + Math.floor(i / PER_ROW) * (BOX_H + GAP_Y)
+        };
+    });
+
+    const rowCount = Math.ceil(ordered.length / PER_ROW);
+    const width = 48 + PER_ROW * BOX_W + (PER_ROW - 1) * GAP_X;
+    const height = 48 + rowCount * BOX_H + (rowCount - 1) * GAP_Y;
+
+    /* Anchor each end on the box BORDER facing the other box, so the
+       arrowhead lands outside the rectangle instead of under it. */
+    function anchors(a, b, spread) {
+        const acx = a.x + BOX_W / 2;
+        const acy = a.y + BOX_H / 2;
+        const bcx = b.x + BOX_W / 2;
+        const bcy = b.y + BOX_H / 2;
+
+        const dx = bcx - acx;
+        const dy = bcy - acy;
+
+        // Mostly side-by-side -> leave from the left/right edge.
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            const sign = dx >= 0 ? 1 : -1;
+            const yOffset = spread * 9;
+
+            // Non-adjacent columns: dip the curve into the row gap so it
+            // arcs UNDER any box sitting between the two tables.
+            const skipsABox = Math.abs(dx) > BOX_W + GAP_X + 5;
+
+            return {
+                x1: acx + sign * BOX_W / 2, y1: acy + yOffset,
+                x2: bcx - sign * BOX_W / 2, y2: bcy + yOffset,
+                cx: (acx + bcx) / 2,
+                cy: (acy + bcy) / 2 + yOffset + spread * 26 +
+                    (skipsABox ? BOX_H / 2 + 55 : 0),
+                horizontal: true
+            };
+        }
+
+        // Mostly stacked -> leave from the top/bottom edge, bowing out
+        // sideways so the curve clears anything in between.
+        const sign = dy >= 0 ? 1 : -1;
+        const bow = (Math.abs(dy) > BOX_H + GAP_Y + 5 ? 1 : 0);
+        const xOffset = spread * 12;
+
+        return {
+            x1: acx + xOffset, y1: acy + sign * BOX_H / 2,
+            x2: bcx + xOffset, y2: bcy - sign * BOX_H / 2,
+            cx: (acx + bcx) / 2 + xOffset + (BOX_W / 2 + 34) * bow + spread * 26,
+            cy: (acy + bcy) / 2,
+            horizontal: false
+        };
+    }
+
+    // Offset parallel links between the same pair of tables.
+    const seen = {};
+
+    const links = relationships.map(rel => {
+        const a = positions[rel.from];
+        const b = positions[rel.to];
+        if (!a || !b) return "";
+
+        const key = [rel.from, rel.to].sort().join("::");
+        const spread = (seen[key] = (seen[key] || 0) + 1) - 1;
+
+        const p = anchors(a, b, spread % 2 === 0 ? spread / 2 : -(spread + 1) / 2);
+
+        return '<path d="M ' + p.x1.toFixed(1) + " " + p.y1.toFixed(1) +
+               " Q " + p.cx.toFixed(1) + " " + p.cy.toFixed(1) +
+               " " + p.x2.toFixed(1) + " " + p.y2.toFixed(1) + '" ' +
+               'fill="none" stroke="rgba(96,165,250,0.55)" stroke-width="1.3" ' +
+               'marker-end="url(#arrow)"><title>' +
+               esc(rel.from + "." + rel.fromCol + "  →  " + rel.to + "." + rel.toCol) +
+               "</title></path>";
+    }).join("");
+
+    const boxes = ordered.map(t => {
+        const p = positions[t.name];
+        const connected = (degree[t.name] || 0) > 0;
+
+        return '<g class="erd-box" onclick="openTable(\'' + esc(t.name) + '\')">' +
+            '<rect x="' + p.x + '" y="' + p.y + '" width="' + BOX_W + '" height="' + BOX_H + '" ' +
+            'rx="10" fill="#101a13" stroke="' +
+            (connected ? "rgba(96,165,250,0.35)" : "rgba(117,224,99,0.20)") +
+            '" stroke-width="1"/>' +
+            '<text x="' + (p.x + 13) + '" y="' + (p.y + 24) + '" ' +
+            'fill="#75E063" font-size="11.5" font-family="ui-monospace, monospace">' +
+            esc(t.name) + "</text>" +
+            '<text x="' + (p.x + 13) + '" y="' + (p.y + 42) + '" ' +
+            'fill="#6b7280" font-size="9.5" font-family="ui-monospace, monospace">' +
+            fmtNum(t.row_count) + " rows · " + t.columns.length + " cols</text>" +
+            "<title>" + esc(t.name) + " — click to explore</title>" +
+        "</g>";
+    }).join("");
+
+    host.innerHTML =
+        '<svg width="' + width + '" height="' + height + '" ' +
+        'viewBox="0 0 ' + width + " " + height + '">' +
+            '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" ' +
+            'markerWidth="5" markerHeight="5" orient="auto-start-reverse">' +
+            '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(96,165,250,0.75)"/></marker></defs>' +
+            links + boxes +
+        "</svg>" +
+        (relationships.length === 0
+            ? '<div class="mt-2 text-[11px] text-zinc-600">No foreign keys declared in this schema.</div>'
+            : '<div class="mt-3 text-[10px] text-zinc-600">' +
+              relationships.length + " foreign-key relationship(s) · " +
+              "blue border = participates in a relationship · click a table to explore it</div>");
+}
+
+
+// =====================================================================
+// QUANT CHARTS
+// =====================================================================
+
+const CHART_COLORS = ["#75E063", "#60A5FA", "#FBBF24", "#F472B6",
+                      "#A78BFA", "#34D399", "#FB7185", "#38BDF8"];
+
+function chartBase(extra) {
+    return Object.assign({
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+            legend: {
+                display: false,
+                labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 }
+            },
+            tooltip: {
+                backgroundColor: "#0B120E",
+                borderColor: "rgba(117,224,99,0.25)",
+                borderWidth: 1,
+                titleColor: "#e5e7eb",
+                bodyColor: "#d1d5db",
+                titleFont: { size: 11 },
+                bodyFont: { size: 11 }
+            }
+        },
+        scales: {
+            x: {
+                ticks: { color: "#5b6660", font: { size: 9 }, maxTicksLimit: 8 },
+                grid: { color: "rgba(255,255,255,0.03)" }
+            },
+            y: {
+                ticks: { color: "#5b6660", font: { size: 9 } },
+                grid: { color: "rgba(255,255,255,0.04)" }
+            }
+        }
+    }, extra || {});
+}
+
+function chartCard(id, title, subtitle, tall) {
+    return '<div class="panel rounded-xl p-5">' +
+        '<div class="flex items-baseline justify-between">' +
+            '<div class="text-[10px] uppercase tracking-[0.18em] text-zinc-400">' + esc(title) + "</div>" +
+            '<div class="text-[9px] text-zinc-600">' + esc(subtitle || "") + "</div>" +
+        "</div>" +
+        '<div class="mt-4" style="height:' + (tall ? 260 : 190) + 'px">' +
+            '<canvas id="' + id + '"></canvas>' +
+        "</div>" +
+    "</div>";
+}
+
+function makeChart(id, config) {
+    const canvas = $(id);
+    if (!canvas) return;
+    if (state.charts[id]) state.charts[id].destroy();
+    state.charts[id] = new Chart(canvas.getContext("2d"), config);
+}
+
+async function loadCharts() {
+    const host = $("view-charts");
+    host.innerHTML = loading("Building charts from live rows…");
+
+    let payload;
+
+    try {
+        payload = await api("/api/db/quant");
+    } catch (error) {
+        host.innerHTML = errorState(error.message);
+        return;
+    }
+
+    if (!payload.available) {
+        host.innerHTML = emptyState("No database", "The database file does not exist yet.");
+        return;
+    }
+
+    state.quant = payload;
+
+    const d = payload.datasets || {};
+    const blocks = [];
+    const builders = [];
+
+    // ---- detected fields banner --------------------------------
+    const detected = payload.detected_fields || {};
+    const detectedChips = Object.keys(detected).map(category =>
+        '<div class="mb-2">' +
+            '<span class="chip chip-idx">' + esc(category) + "</span> " +
+            detected[category].slice(0, 8).map(f =>
+                '<span class="mono text-[10px] text-zinc-500">' +
+                esc(f.table + "." + f.column) + "</span>"
+            ).join('<span class="text-zinc-700"> · </span>') +
+            (detected[category].length > 8
+                ? '<span class="text-[10px] text-zinc-700"> +' +
+                  (detected[category].length - 8) + " more</span>"
+                : "") +
+        "</div>"
+    ).join("");
+
+    // ---- headline stats ----------------------------------------
+    const closed = d.closed_trades || [];
+    const totalPnl = closed.reduce((sum, t) => sum + Number(t.pnl || 0), 0);
+    const wins = closed.filter(t => Number(t.pnl) > 0).length;
+    const losses = closed.filter(t => Number(t.pnl) < 0).length;
+    const winRate = closed.length ? (wins / closed.length * 100) : null;
+    const maxDd = (d.pnl_curve || []).reduce(
+        (worst, p) => Math.min(worst, Number(p.drawdown || 0)), 0
+    );
+    const grossWin = closed.filter(t => Number(t.pnl) > 0)
+                           .reduce((s, t) => s + Number(t.pnl), 0);
+    const grossLoss = Math.abs(closed.filter(t => Number(t.pnl) < 0)
+                           .reduce((s, t) => s + Number(t.pnl), 0));
+
+    const stats =
+        '<div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">' +
+        statCard("Closed trades", fmtNum(closed.length), wins + "W / " + losses + "L") +
+        statCard("Realised P&L",
+                 '<span class="' + pnlClass(totalPnl) + '">' +
+                 (totalPnl >= 0 ? "+" : "") + totalPnl.toFixed(2) + "</span>",
+                 "sum of closed pnl") +
+        statCard("Win rate",
+                 winRate === null ? "—" : winRate.toFixed(1) + "%",
+                 closed.length < 30 ? "small sample (<30)" : "over " + closed.length + " trades") +
+        statCard("Max drawdown",
+                 '<span class="text-red-400">' + maxDd.toFixed(2) + "</span>",
+                 "peak-to-trough on closed P&L") +
+        statCard("Profit factor",
+                 grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : "—",
+                 "gross win / gross loss") +
+        statCard("Equity points", fmtNum((d.equity_curve || []).length),
+                 "snapshots stored") +
+        "</div>";
+
+    // ---- charts -------------------------------------------------
+    if ((d.equity_curve || []).length) {
+        blocks.push(chartCard("chEquity", "Equity curve",
+                              d.equity_curve.length + " snapshots", true));
+        builders.push(() => {
+            const points = d.equity_curve;
+            makeChart("chEquity", {
+                type: "line",
+                data: {
+                    labels: points.map(p => fmtTime(p.created_at)),
+                    datasets: [
+                        {
+                            label: "Equity",
+                            data: points.map(p => p.equity),
+                            borderColor: "#75E063",
+                            backgroundColor: "rgba(117,224,99,0.10)",
+                            borderWidth: 1.6, pointRadius: 0, fill: true, tension: 0.25
+                        },
+                        {
+                            label: "Balance",
+                            data: points.map(p => p.balance),
+                            borderColor: "rgba(96,165,250,0.7)",
+                            borderWidth: 1.2, pointRadius: 0, fill: false,
+                            borderDash: [4, 3], tension: 0.25
+                        }
+                    ]
+                },
+                options: chartBase({ plugins: { legend: { display: true, position: "top",
+                    labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 } } } })
+            });
+        });
+    }
+
+    if ((d.pnl_curve || []).length) {
+        blocks.push(chartCard("chCum", "Cumulative P&L & drawdown",
+                              d.pnl_curve.length + " closed trades", true));
+        builders.push(() => {
+            const points = d.pnl_curve;
+            makeChart("chCum", {
+                type: "line",
+                data: {
+                    labels: points.map(p => fmtTime(p.closed_at)),
+                    datasets: [
+                        {
+                            label: "Cumulative P&L",
+                            data: points.map(p => p.cumulative_pnl),
+                            borderColor: "#75E063",
+                            backgroundColor: "rgba(117,224,99,0.10)",
+                            borderWidth: 1.6, pointRadius: 0, fill: true, tension: 0.2
+                        },
+                        {
+                            label: "Drawdown",
+                            data: points.map(p => p.drawdown),
+                            borderColor: "#F87171",
+                            backgroundColor: "rgba(248,113,113,0.12)",
+                            borderWidth: 1.2, pointRadius: 0, fill: true, tension: 0.2
+                        }
+                    ]
+                },
+                options: chartBase({ plugins: { legend: { display: true, position: "top",
+                    labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 } } } })
+            });
+        });
+    }
+
+    if ((d.daily_pnl || []).length) {
+        blocks.push(chartCard("chDaily", "Daily P&L", d.daily_pnl.length + " days"));
+        builders.push(() => {
+            makeChart("chDaily", {
+                type: "bar",
+                data: {
+                    labels: d.daily_pnl.map(r => r.day),
+                    datasets: [{
+                        data: d.daily_pnl.map(r => r.pnl),
+                        backgroundColor: d.daily_pnl.map(r =>
+                            Number(r.pnl) >= 0 ? "rgba(117,224,99,0.7)" : "rgba(248,113,113,0.7)"),
+                        borderRadius: 3
+                    }]
+                },
+                options: chartBase()
+            });
+        });
+    }
+
+    if ((d.by_symbol || []).length) {
+        blocks.push(chartCard("chSymbol", "P&L by symbol",
+                              d.by_symbol.length + " symbols"));
+        builders.push(() => {
+            makeChart("chSymbol", {
+                type: "bar",
+                data: {
+                    labels: d.by_symbol.map(r => r.symbol),
+                    datasets: [{
+                        data: d.by_symbol.map(r => r.pnl),
+                        backgroundColor: d.by_symbol.map(r =>
+                            Number(r.pnl) >= 0 ? "rgba(117,224,99,0.7)" : "rgba(248,113,113,0.7)"),
+                        borderRadius: 3
+                    }]
+                },
+                options: chartBase({ indexAxis: "y" })
+            });
+        });
+
+        blocks.push(chartCard("chWinRate", "Win rate by symbol", "closed trades only"));
+        builders.push(() => {
+            makeChart("chWinRate", {
+                type: "bar",
+                data: {
+                    labels: d.by_symbol.map(r => r.symbol),
+                    datasets: [
+                        { label: "Wins", data: d.by_symbol.map(r => r.wins),
+                          backgroundColor: "rgba(117,224,99,0.75)", borderRadius: 3 },
+                        { label: "Losses", data: d.by_symbol.map(r => r.losses),
+                          backgroundColor: "rgba(248,113,113,0.75)", borderRadius: 3 }
+                    ]
+                },
+                options: chartBase({
+                    scales: {
+                        x: { stacked: true, ticks: { color: "#5b6660", font: { size: 9 } },
+                             grid: { color: "rgba(255,255,255,0.03)" } },
+                        y: { stacked: true, ticks: { color: "#5b6660", font: { size: 9 } },
+                             grid: { color: "rgba(255,255,255,0.04)" } }
+                    },
+                    plugins: { legend: { display: true, position: "top",
+                        labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 } } }
+                })
+            });
+        });
+    }
+
+    if ((d.price_series || []).length) {
+        blocks.push(chartCard("chPrice", "Price series (market_states.last_close)",
+                              "per symbol", true));
+        builders.push(() => {
+            const bySymbol = {};
+            d.price_series.forEach(p => {
+                if (!bySymbol[p.symbol]) bySymbol[p.symbol] = [];
+                bySymbol[p.symbol].push(p);
+            });
+
+            const symbols = Object.keys(bySymbol);
+
+            makeChart("chPrice", {
+                type: "line",
+                data: {
+                    datasets: symbols.map((symbol, i) => ({
+                        label: symbol,
+                        data: bySymbol[symbol].map(p => ({
+                            x: new Date(p.created_at).getTime(),
+                            y: p.last_close
+                        })),
+                        borderColor: CHART_COLORS[i % CHART_COLORS.length],
+                        borderWidth: 1.4, pointRadius: 0, tension: 0.2,
+                        yAxisID: symbols.length > 1 ? "y" : "y"
+                    }))
+                },
+                options: chartBase({
+                    parsing: false,
+                    scales: {
+                        x: { type: "linear",
+                             ticks: { color: "#5b6660", font: { size: 9 }, maxTicksLimit: 7,
+                                      callback: (v) => fmtTime(v).split(",")[0] },
+                             grid: { color: "rgba(255,255,255,0.03)" } },
+                        y: { type: "logarithmic",
+                             ticks: { color: "#5b6660", font: { size: 9 } },
+                             grid: { color: "rgba(255,255,255,0.04)" } }
+                    },
+                    plugins: { legend: { display: true, position: "top",
+                        labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 } } }
+                })
+            });
+        });
+    }
+
+    const donuts = [
+        ["chOutcomes", "Trade outcomes", d.outcomes, "result", "n"],
+        ["chStatus", "Execution status", d.status_split, "execution_status", "n"],
+        ["chAiSignals", "AI signals", d.ai_signals, "ai_signal", "n"],
+        ["chFinal", "Engine final decisions", d.final_decisions, "final_decision", "n"]
+    ];
+
+    donuts.forEach(([id, title, data, labelKey, valueKey]) => {
+        if (!data || !data.length) return;
+
+        blocks.push(chartCard(id, title, data.reduce((s, r) => s + r[valueKey], 0) + " rows"));
+        builders.push(() => {
+            makeChart(id, {
+                type: "doughnut",
+                data: {
+                    labels: data.map(r => r[labelKey]),
+                    datasets: [{
+                        data: data.map(r => r[valueKey]),
+                        backgroundColor: data.map((r, i) => {
+                            const label = String(r[labelKey]).toUpperCase();
+                            if (/WIN|EXECUTED|BUY/.test(label)) return "#75E063";
+                            if (/LOSS|REJECTED|FAILED|SELL/.test(label)) return "#F87171";
+                            if (/PENDING|HOLD/.test(label)) return "#FBBF24";
+                            return CHART_COLORS[i % CHART_COLORS.length];
+                        }),
+                        borderColor: "#0B120E",
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: "62%",
+                    plugins: {
+                        legend: { display: true, position: "right",
+                                  labels: { color: "#9ca3af", font: { size: 10 }, boxWidth: 10 } },
+                        tooltip: { backgroundColor: "#0B120E",
+                                   borderColor: "rgba(117,224,99,0.25)", borderWidth: 1 }
+                    }
+                }
+            });
+        });
+    });
+
+    const bars = [
+        ["chSetup", "P&L by setup", d.by_setup, "setup", "pnl"],
+        ["chRegime", "P&L by market regime", d.by_regime, "market_regime", "pnl"],
+        ["chScores", "AI score distribution", d.score_histogram, "bucket", "n"],
+        ["chDecSym", "Decisions per symbol", d.decisions_by_symbol, "symbol", "n"],
+        ["chTradesDay", "Trade attempts per day", d.trades_per_day, "day", "n"]
+    ];
+
+    bars.forEach(([id, title, data, labelKey, valueKey]) => {
+        if (!data || !data.length) return;
+
+        blocks.push(chartCard(id, title, data.length + " groups"));
+        builders.push(() => {
+            makeChart(id, {
+                type: "bar",
+                data: {
+                    labels: data.map(r => r[labelKey]),
+                    datasets: [{
+                        data: data.map(r => r[valueKey]),
+                        backgroundColor: data.map((r, i) =>
+                            valueKey === "pnl"
+                                ? (Number(r.pnl) >= 0 ? "rgba(117,224,99,0.7)" : "rgba(248,113,113,0.7)")
+                                : CHART_COLORS[i % CHART_COLORS.length] + "cc"),
+                        borderRadius: 3
+                    }]
+                },
+                options: chartBase()
+            });
+        });
+    });
+
+    if (blocks.length === 0) {
+        host.innerHTML =
+            '<div class="panel mb-6 rounded-xl p-5">' +
+                '<div class="mb-3 text-[9px] uppercase tracking-[0.2em] text-zinc-600">' +
+                    "Quant fields detected in the live schema</div>" + detectedChips +
+            "</div>" +
+            emptyState(
+                "No chartable data yet",
+                "The schema has the right columns, but there are no rows to plot. " +
+                "Charts appear as soon as the engine records decisions, trades or equity snapshots."
+            );
+        return;
+    }
+
+    host.innerHTML =
+        stats +
+        '<div class="panel my-6 rounded-xl p-5">' +
+            '<div class="mb-3 text-[9px] uppercase tracking-[0.2em] text-zinc-600">' +
+                "Quant fields auto-detected in the live schema</div>" + detectedChips +
+        "</div>" +
+        '<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">' + blocks.join("") + "</div>";
+
+    builders.forEach(build => build());
+}
+
+
+// =====================================================================
+// SQL CONSOLE
+// =====================================================================
+
+function renderSqlView() {
+    $("view-sql").innerHTML =
+        '<div class="panel rounded-xl p-5">' +
+            '<div class="flex items-center justify-between">' +
+                '<div class="text-[10px] uppercase tracking-[0.18em] text-zinc-400">Read-only query</div>' +
+                '<div class="text-[10px] text-zinc-600">' +
+                    "SELECT / WITH / EXPLAIN only · max 1000 rows</div>" +
+            "</div>" +
+
+            '<textarea id="sqlInput" rows="6" spellcheck="false" ' +
+            '          class="mono mt-3 w-full resize-y rounded-lg border border-white/8 bg-black/40 p-3 ' +
+            '                 text-[12px] leading-6 text-zinc-200 focus:border-lime/30" ' +
+            '          placeholder="SELECT symbol, execution_status, COUNT(*) AS n\nFROM trades\nGROUP BY symbol, execution_status\nORDER BY n DESC"></textarea>' +
+
+            '<div class="mt-3 flex flex-wrap items-center gap-2">' +
+                '<button id="runSql" ' +
+                '        class="rounded-lg border border-lime/25 bg-lime/10 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-lime transition hover:bg-lime/15">' +
+                    "Run query" +
+                "</button>" +
+                '<span class="text-[10px] text-zinc-600">⌘/Ctrl + Enter</span>' +
+                '<div class="flex-1"></div>' +
+                '<div id="sqlStats" class="mono text-[10px] text-zinc-500"></div>' +
+            "</div>" +
+
+            '<div class="mb-2 mt-4 text-[9px] uppercase tracking-widest text-zinc-600">Examples</div>' +
+            '<div id="sqlExamples" class="flex flex-wrap gap-2"></div>' +
+        "</div>" +
+
+        '<div id="sqlResult" class="panel scroll mt-5 max-h-[52vh] overflow-auto rounded-xl"></div>';
+
+    const examples = [
+        ["Why only one symbol trades",
+         "SELECT symbol, final_decision, COUNT(*) AS n\nFROM decisions\nGROUP BY symbol, final_decision\nORDER BY symbol, n DESC"],
+        ["Rejected / failed trades",
+         "SELECT symbol, execution_status, mt5_retcode, mt5_comment, COUNT(*) AS n\nFROM trades\nWHERE execution_status IN ('REJECTED','FAILED')\nGROUP BY symbol, execution_status, mt5_retcode, mt5_comment"],
+        ["Per-symbol cycle errors",
+         "SELECT symbol, message, COUNT(*) AS n\nFROM events\nWHERE level = 'ERROR'\nGROUP BY symbol, message\nORDER BY n DESC"],
+        ["Closed trade P&L",
+         "SELECT symbol, COUNT(*) AS trades, ROUND(SUM(pnl),2) AS pnl\nFROM trades\nWHERE execution_status = 'CLOSED'\nGROUP BY symbol"]
+    ];
+
+    $("sqlExamples").innerHTML = examples.map((ex, i) =>
+        '<button data-example="' + i + '" ' +
+        'class="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-1.5 text-[10px] text-zinc-400 transition hover:border-lime/25 hover:text-lime">' +
+        esc(ex[0]) + "</button>"
+    ).join("");
+
+    $("sqlExamples").querySelectorAll("[data-example]").forEach(button => {
+        button.addEventListener("click", () => {
+            $("sqlInput").value = examples[Number(button.dataset.example)][1];
+        });
+    });
+
+    $("runSql").addEventListener("click", runSql);
+
+    $("sqlInput").addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runSql();
+    });
+}
+
+async function runSql() {
+    const host = $("sqlResult");
+    const sql = $("sqlInput").value;
+
+    if (!sql.trim()) return;
+
+    host.innerHTML = loading("Executing…");
+    $("sqlStats").textContent = "";
+
+    let payload;
+
+    try {
+        payload = await api("/api/db/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sql: sql })
+        });
+    } catch (error) {
+        host.innerHTML = errorState(error.message);
+        return;
+    }
+
+    if (payload.status === "error") {
+        host.innerHTML = errorState(payload.message);
+        $("sqlStats").textContent = "rejected";
+        return;
+    }
+
+    $("sqlStats").textContent =
+        payload.row_count + " row(s) · " + payload.execution_ms + " ms" +
+        (payload.truncated ? " · truncated at " + payload.max_rows : "");
+
+    if (payload.row_count === 0) {
+        host.innerHTML = emptyState("Query returned no rows",
+                                    "Executed in " + payload.execution_ms + " ms.");
+        return;
+    }
+
+    const head = payload.columns.map(c => "<th>" + esc(c) + "</th>").join("");
+
+    const body = payload.rows.map(row =>
+        "<tr>" + payload.columns.map(c =>
+            "<td>" + fmtCell(row[c], c) + "</td>"
+        ).join("") + "</tr>"
+    ).join("");
+
+    host.innerHTML =
+        '<table class="grid-table mono"><thead><tr>' + head +
+        "</tr></thead><tbody>" + body + "</tbody></table>";
+}
+
+
+// =====================================================================
+// BOOT
+// =====================================================================
+
+$("globalRefresh").addEventListener("click", () => {
+    state.schema = null;
+    state.quant = null;
+
+    loadOverview();
+    loadTableList();
+
+    if (state.view === "tables" && state.table) loadTableData();
+    if (state.view === "schema") loadSchema();
+    if (state.view === "charts") loadCharts();
+});
+
+renderSqlView();
+loadOverview();
+loadTableList();
+showView("overview");
+
+</script>
+
+</body>
+</html>
