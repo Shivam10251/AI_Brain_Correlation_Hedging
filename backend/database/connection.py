@@ -130,6 +130,9 @@ ADDITIVE_COLUMNS = {
         # Phase 3 - risk engine verdict
         ("risk_checks_json", "TEXT"),
         ("risk_profile_id", "INTEGER"),
+        # Phase 4 - feature provenance
+        ("feature_version", "TEXT"),
+        ("bar_time_utc", "TEXT"),
     ),
 
     # Phase 2 - money risk and account attribution
@@ -146,6 +149,10 @@ ADDITIVE_COLUMNS = {
 
     "market_states": (
         ("account_id", "INTEGER"),
+        # Phase 4
+        ("feature_version", "TEXT"),
+        ("bar_time_utc", "TEXT"),
+        ("bar_time_server", "TEXT"),
     ),
 
     "events": (

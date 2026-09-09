@@ -27,7 +27,7 @@ from backend import config
 from backend.ai.brain import get_ai_decision
 from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
-from backend.market import news
+from backend.market import data_engine, news
 from backend.risk import engine as risk_engine
 from backend.risk import killswitch, money
 from backend.risk import profiles as risk_profiles
@@ -270,9 +270,16 @@ async def process_symbol(symbol, cycle_id):
     decision["final_decision"] = final_decision
     decision["override_reason"] = override_reason
 
+    # Phase 4: which feature formulas and which bar produced this.
+    decision["feature_version"] = features.get("feature_version")
+    decision["bar_time_utc"] = features.get("bar_time_utc")
+
     decision_id = repo.insert_decision(decision)
 
     decision["id"] = decision_id
+
+    # Phase 4: the exact bars this decision saw, for offline replay.
+    repo.insert_decision_bars(decision_id, market_data.get("snapshot"))
 
     # The AI panel now tracks the decision it belongs to, instead of a
     # single global slot every symbol overwrote.
@@ -513,70 +520,157 @@ async def execute_and_record(symbol, signal, decision, market_data,
 # MAIN LOOP
 # =====================================================================
 
+def latest_closed_bar_time(symbol):
+    """
+    The open time of the newest CLOSED H1 bar, as an ISO UTC string.
+
+    One cheap MT5 call per symbol per poll. Returns None when the
+    symbol is unavailable, which the caller treats as "nothing new".
+    """
+
+    import MetaTrader5 as mt5
+
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 1, 1)
+
+    if rates is None or len(rates) == 0:
+        return None
+
+    offset = bot_state.get("server_utc_offset_min")
+
+    return str(
+        data_engine.to_utc([rates[0]["time"]], offset)[0]
+    )
+
+
+def symbol_has_new_bar(symbol):
+    """
+    Has this symbol produced a bar we have not decided on yet?
+
+    Compared against the database rather than in-memory state, so the
+    cadence survives a restart with nothing extra to persist and
+    nothing that can drift out of sync.
+    """
+
+    current = latest_closed_bar_time(symbol)
+
+    if current is None:
+        return False, None
+
+    decided = repo.latest_decided_bar(symbol)
+
+    return (decided is None or current > decided), current
+
+
+async def run_cycle(cycle_id, symbols):
+    """One pass over the given symbols."""
+
+    for symbol in symbols:
+
+        # Bot may have been stopped while processing.
+        if not bot_state["is_running"]:
+            break
+
+        try:
+            await process_symbol(symbol, cycle_id)
+
+        except Exception as e:                      # noqa: BLE001
+            bot_state["last_error"] = f"{symbol}: {e}"
+
+            print(f"[ERROR] {symbol}: {e}")
+
+            repo.insert_event(
+                f"Cycle error on {symbol}: {e}",
+                level="ERROR",
+                category="CYCLE",
+                symbol=symbol,
+            )
+
+    bot_state["last_cycle_at"] = repo.utc_now()
+
+    refresh_cache()
+
+
 async def trading_loop():
     """
     Main AI trading loop.
 
-    Sequentially processes every symbol in config.SYMBOLS.
+    Two cadences (Phase 4):
+
+      per_bar   poll every DECISION_POLL_SECONDS, but decide for a
+                symbol only when its H1 bar has advanced. The data
+                changes hourly; deciding 120 times per bar on the same
+                34 candles was measuring model noise, not the market
+                (Phase 0 weakness #6).
+
+      interval  the original behaviour, retained as experiment arm E2
+                so 'per bar vs 30s' can be answered with data rather
+                than opinion.
+
+    Reconciliation runs on EVERY poll in both modes. Settling closed
+    trades and keeping the ledger current must not wait for a new bar.
     """
 
     while True:
 
-        if bot_state["is_running"]:
-
-            cycle_id = uuid.uuid4().hex[:12]
-
-            heartbeat_lock()
-
-            if not ensure_mt5():
-                repo.insert_event(
-                    "Cycle skipped - MT5 unavailable",
-                    level="ERROR",
-                    category="MT5",
-                )
-
-                await asyncio.sleep(bot_state["interval"])
-                continue
-
-            # Settle anything that closed since the last cycle. This is
-            # what turns finished trades into P&L and experiences.
-            try:
-                from backend.core.reconciler import run_full_reconciliation
-
-                await asyncio.to_thread(run_full_reconciliation)
-            except Exception as error:              # noqa: BLE001
-                print(f"[ERROR] reconciliation: {error}")
-
-            for symbol in config.SYMBOLS:
-
-                # Bot may have been stopped while processing
-                if not bot_state["is_running"]:
-                    break
-
-                try:
-                    await process_symbol(symbol, cycle_id)
-
-                except Exception as e:
-                    bot_state["last_error"] = f"{symbol}: {e}"
-
-                    print(f"[ERROR] {symbol}: {e}")
-
-                    repo.insert_event(
-                        f"Cycle error on {symbol}: {e}",
-                        level="ERROR",
-                        category="CYCLE",
-                        symbol=symbol,
-                    )
-
-            bot_state["last_cycle_at"] = repo.utc_now()
-
-            refresh_cache()
-
-            # --------------------------------------------------------
-            # Wait before next complete cycle
-            # --------------------------------------------------------
-            await asyncio.sleep(bot_state["interval"])
-
-        else:
+        if not bot_state["is_running"]:
             # Bot is stopped, don't burn CPU
             await asyncio.sleep(1)
+            continue
+
+        per_bar = config.DECISION_MODE == "per_bar"
+
+        cycle_id = uuid.uuid4().hex[:12]
+
+        heartbeat_lock()
+
+        if not ensure_mt5():
+            repo.insert_event(
+                "Cycle skipped - MT5 unavailable",
+                level="ERROR",
+                category="MT5",
+            )
+
+            await asyncio.sleep(
+                config.DECISION_POLL_SECONDS if per_bar
+                else bot_state["interval"]
+            )
+            continue
+
+        # Settle anything that closed since the last poll. This is what
+        # turns finished trades into P&L, experiences and ledger rows.
+        try:
+            from backend.core.reconciler import run_full_reconciliation
+
+            await asyncio.to_thread(run_full_reconciliation)
+        except Exception as error:                  # noqa: BLE001
+            print(f"[ERROR] reconciliation: {error}")
+
+        if per_bar:
+            due = []
+
+            for symbol in config.SYMBOLS:
+                try:
+                    has_new, bar_time = await asyncio.to_thread(
+                        symbol_has_new_bar, symbol
+                    )
+                except Exception as error:          # noqa: BLE001
+                    print(f"[ERROR] bar check {symbol}: {error}")
+                    continue
+
+                if has_new:
+                    due.append(symbol)
+
+            if due:
+                print(f"[CYCLE {cycle_id}] new H1 bar on: {', '.join(due)}")
+
+                await run_cycle(cycle_id, due)
+            else:
+                # Still record liveness even when nothing is due.
+                bot_state["last_cycle_at"] = repo.utc_now()
+
+            await asyncio.sleep(config.DECISION_POLL_SECONDS)
+
+        else:
+            await run_cycle(cycle_id, config.SYMBOLS)
+
+            await asyncio.sleep(bot_state["interval"])

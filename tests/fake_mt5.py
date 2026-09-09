@@ -346,6 +346,11 @@ def copy_rates_from_pos(symbol, timeframe, start, count):
 
     import numpy as np
 
+    # A symbol the broker does not offer returns None, as real MT5
+    # does - not a silently fabricated series.
+    if symbol in world.unknown_symbols:
+        return None
+
     step = 86400 if timeframe == TIMEFRAME_D1 else 3600
 
     server_now = int(time.time() + world.server_offset_minutes * 60)

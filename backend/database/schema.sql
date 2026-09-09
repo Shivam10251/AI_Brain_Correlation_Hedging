@@ -195,6 +195,10 @@ CREATE TABLE IF NOT EXISTS decisions (
     risk_checks_json    TEXT,
     risk_profile_id     INTEGER REFERENCES risk_profiles(id),
 
+    -- Phase 4: feature formulas and the bar this decision was made on
+    feature_version     TEXT,
+    bar_time_utc        TEXT,
+
     trade_id          INTEGER REFERENCES trades(id)
 );
 
@@ -334,6 +338,42 @@ CREATE INDEX IF NOT EXISTS idx_ledger_day
 
 
 -- ---------------------------------------------------------------------
+-- Decision bar snapshots (Phase 4).
+--
+-- The EXACT bars each decision saw, keyed by decision_id. This is what
+-- makes offline replay possible: Phase 8 can re-run a changed stop
+-- rule, threshold or feature formula over real history without a
+-- single new API call, and without hoping MT5 still serves the same
+-- bars months later.
+--
+-- Stored as raw MT5 rows (epoch seconds, server time) so
+-- compute_features can be re-run against them byte-for-byte.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS decision_bars (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at            TEXT    NOT NULL,
+
+    decision_id           INTEGER UNIQUE REFERENCES decisions(id),
+    symbol                TEXT    NOT NULL,
+
+    feature_version       TEXT,
+    server_utc_offset_min INTEGER,
+
+    daily_json            TEXT    NOT NULL,   -- 10 D1 rows, closed
+    hourly_json           TEXT    NOT NULL,   -- 24 H1 rows, closed
+    tick_json             TEXT,
+    symbol_info_json      TEXT,
+
+    -- The features that were actually stored, so a replay can be
+    -- compared against them rather than trusted.
+    features_json         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_bars_symbol
+    ON decision_bars(symbol, created_at DESC);
+
+
+-- ---------------------------------------------------------------------
 -- Equity snapshots: raw points for the equity curve.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -374,7 +414,13 @@ CREATE TABLE IF NOT EXISTS market_states (
     market_regime     TEXT,
     session           TEXT,
     features_json     TEXT,
-    account_id        INTEGER
+    account_id        INTEGER,
+
+    -- Phase 4: which formulas produced these numbers, and the bar the
+    -- decision was made on (both clocks).
+    feature_version   TEXT,
+    bar_time_utc      TEXT,
+    bar_time_server   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_market_symbol ON market_states(symbol, created_at DESC);

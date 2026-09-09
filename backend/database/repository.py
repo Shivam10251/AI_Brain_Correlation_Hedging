@@ -36,12 +36,16 @@ from .repo_trading import (
 from .repo_context import (
     count_experiences,
     find_experiences,
+    get_decision_bars,
+    get_decision_bars_batch,
     get_equity_snapshots,
     get_events,
     get_latest_equity,
     get_latest_market_state_per_symbol,
     get_market_states,
     get_state,
+    latest_decided_bar,
+    insert_decision_bars,
     insert_equity_snapshot,
     insert_event,
     insert_experience,
@@ -77,6 +81,10 @@ __all__ = [
 
     # market state
     "insert_market_state",
+    "insert_decision_bars",
+    "get_decision_bars",
+    "get_decision_bars_batch",
+    "latest_decided_bar",
     "get_latest_market_state_per_symbol",
     "get_market_states",
 
