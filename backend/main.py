@@ -24,7 +24,7 @@ import MetaTrader5 as mt5
 from backend import config
 from backend.core import engine
 from backend.core.engine import bot_state
-from backend.database import analytics, initialize_database
+from backend.database import analytics, explorer, initialize_database
 from backend.database import repository as repo
 
 
@@ -155,6 +155,101 @@ async def home(request: Request):
         name="index.html",
         context={"request": request}
     )
+
+
+@app.get("/dashboard")
+async def quant_db_dashboard(request: Request):
+    """
+    Quant DB Dashboard - a read-only visual explorer over the engine's
+    SQLite database (data/quantbot.db). It never writes to the database.
+    """
+
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"request": request},
+    )
+
+
+# ============================================================
+# API: QUANT DB DASHBOARD (read-only database explorer)
+#
+# Every handler runs blocking sqlite work in a worker thread so the
+# trading loop and the rest of the dashboard keep serving. The
+# explorer module opens its own PRAGMA query_only connection - none of
+# these endpoints can mutate data/quantbot.db.
+# ============================================================
+
+@app.get("/api/db/meta")
+async def db_meta():
+    return await asyncio.to_thread(explorer.database_metadata)
+
+
+@app.get("/api/db/tables")
+async def db_tables():
+    if not await asyncio.to_thread(explorer.database_exists):
+        return {"available": False, "tables": []}
+
+    return {"available": True, "tables": await asyncio.to_thread(explorer.list_tables)}
+
+
+@app.get("/api/db/schema")
+async def db_schema():
+    if not await asyncio.to_thread(explorer.database_exists):
+        return {"available": False, "schema": []}
+
+    return {"available": True, "schema": await asyncio.to_thread(explorer.schema_overview)}
+
+
+@app.get("/api/db/table/{name}")
+async def db_table(
+    name: str,
+    limit: int = Query(explorer.DEFAULT_PAGE_SIZE, ge=1, le=explorer.MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+    order_by: str | None = None,
+    order_dir: str = Query("asc", pattern="^(asc|desc)$"),
+    search: str | None = None,
+):
+    if not await asyncio.to_thread(explorer.database_exists):
+        return {"status": "error", "message": "Database file not found yet."}
+
+    try:
+        return await asyncio.to_thread(
+            explorer.table_data,
+            name,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            order_dir=order_dir,
+            search=search,
+        )
+    except ValueError as error:
+        return {"status": "error", "message": str(error)}
+
+
+class QueryRequest(BaseModel):
+    sql: str
+    max_rows: int | None = None
+
+
+@app.post("/api/db/query")
+async def db_query(request: QueryRequest):
+    if not await asyncio.to_thread(explorer.database_exists):
+        return {"status": "error", "message": "Database file not found yet."}
+
+    try:
+        return await asyncio.to_thread(
+            explorer.run_query,
+            request.sql,
+            max_rows=request.max_rows or explorer.MAX_QUERY_ROWS,
+        )
+    except ValueError as error:
+        return {"status": "error", "message": str(error)}
+
+
+@app.get("/api/db/quant")
+async def db_quant():
+    return await asyncio.to_thread(explorer.quant_dashboard)
 
 
 # ============================================================
