@@ -218,6 +218,58 @@ def get_symbol_profiles(account_id=None):
     ))
 
 
+# =====================================================================
+# RISK PROFILES (Phase 3)
+# =====================================================================
+
+def upsert_risk_profile(profile):
+    """
+    Snapshot a risk profile, keyed on (profile_id, checksum).
+
+    An edited YAML has a different checksum and so becomes a NEW row.
+    Historical decisions keep pointing at the limits that were actually
+    in force when they were made - overwriting would silently rewrite
+    the rules a past trade was judged against.
+    """
+
+    existing = get_risk_profile(profile["profile_id"], profile["checksum"])
+
+    if existing:
+        return existing["id"]
+
+    return _insert("risk_profiles", {
+        "created_at": utc_now(),
+        "profile_id": profile["profile_id"],
+        "name": profile.get("name"),
+        "checksum": profile["checksum"],
+        "source_path": profile.get("source_path"),
+        "params_json": _json(profile.get("params")),
+    })
+
+
+def get_risk_profile(profile_id, checksum):
+    row = get_connection().execute(
+        "SELECT * FROM risk_profiles WHERE profile_id = ? AND checksum = ?",
+        (profile_id, checksum),
+    ).fetchone()
+
+    return dict(row) if row else None
+
+
+def get_risk_profile_by_id(row_id):
+    row = get_connection().execute(
+        "SELECT * FROM risk_profiles WHERE id = ?", (row_id,)
+    ).fetchone()
+
+    return dict(row) if row else None
+
+
+def get_risk_profiles(limit=50):
+    return _rows(get_connection().execute(
+        "SELECT * FROM risk_profiles ORDER BY id DESC LIMIT ?", (limit,)
+    ))
+
+
 def decode_json(value, default=None):
     """Helper for callers reading the *_json columns back."""
 

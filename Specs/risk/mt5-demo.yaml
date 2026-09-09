@@ -1,0 +1,76 @@
+# Risk profile: MT5 demo account (Phase 3)
+#
+# Purpose: the Phase 6 calibration run. Permissive enough to collect
+# ~200 closed trades in a reasonable time, strict enough that the
+# sample resembles how the strategy would actually be traded.
+#
+# This is NOT a prop profile. It has no external rule to satisfy; the
+# limits exist so a runaway loop cannot burn the demo account and
+# invalidate the study.
+
+profile_id: mt5-demo
+name: MT5 demo (calibration)
+description: >
+  Calibration profile for the Phase 6 go/no-go study. One position per
+  symbol, a score floor, and loss limits that stop a bad day rather
+  than satisfy a firm's rulebook.
+
+# --- Signal quality -------------------------------------------------
+min_ai_score: 70
+
+# --- Position limits ------------------------------------------------
+max_open_positions_per_symbol: 1
+
+# Hedging is banned regardless of the account's margin_mode. A netting
+# account would silently close the position instead of hedging, which
+# is a different trade from the one the AI asked for.
+allow_hedging: false
+
+# --- Per-trade risk -------------------------------------------------
+# Percent of BALANCE put at risk on one trade.
+risk_pct: 0.25
+max_risk_per_trade_pct: 0.25
+
+# --- Daily limits ---------------------------------------------------
+# Percent of max(start-of-day equity, balance).
+daily_loss_limit_pct: 2.0
+daily_loss_buffer_pct: 0.0
+
+max_losses_per_day: 3
+
+# --- Account floor --------------------------------------------------
+# No hard floor on a demo account.
+max_loss_floor: null
+max_loss_floor_buffer: 0.0
+
+# --- Cost control ---------------------------------------------------
+# Refuse when the spread eats more than this share of the stop
+# distance. At 25% a 1:2 nominal trade is really about 1:1.5.
+max_spread_pct_of_stop: 25.0
+
+# --- Correlated exposure --------------------------------------------
+# Measured in R. Four correlated longs at 1R each is a 4R bet on one
+# dollar move, not four independent 1R bets (Phase 0 C3).
+max_net_exposure_r: 2.0
+
+# Positive weight = the position is SHORT the dollar when long.
+exposure_weights:
+  EURUSD: 1.0
+  GBPUSD: 1.0
+  XAUUSD: 0.8
+  BTCUSD: 0.6
+  USDJPY: -1.0
+  USDCAD: -1.0
+  USDCHF: -1.0
+  AUDUSD: 1.0
+  NZDUSD: 1.0
+
+# --- News (Phase 7 plugs into check 6) -------------------------------
+news_blackout_pre_min: 15
+news_blackout_post_min: 15
+news_min_importance: high
+
+# --- Session / holding ----------------------------------------------
+min_holding_bars: 0
+flatten_before_weekend_min: 0
+trading_windows: []

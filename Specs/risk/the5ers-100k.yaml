@@ -1,0 +1,81 @@
+# Risk profile: The5ers $100K Summer 2-Step (Phase 3)
+#
+# Every number here traces to the firm's rulebook
+# (Specs/strategy/source/Trading_Rules_The5ers_...pdf) and to the
+# Phase 0 §6 requirements matrix. Where the engine is stricter than the
+# firm, the comment says why.
+#
+# NOT for live use until Phase 6 passes and Phase 9 has sized the risk.
+
+profile_id: the5ers-100k
+name: The5ers $100K Summer 2-Step
+description: >
+  Evaluation profile. Enforces the firm's daily loss, max loss floor,
+  hedging ban and news window, with a safety buffer inside each so a
+  breach cannot happen on a rounding difference or a late fill.
+
+account_size: 100000.0
+
+# --- Signal quality -------------------------------------------------
+min_ai_score: 70
+
+# --- Position limits ------------------------------------------------
+max_open_positions_per_symbol: 1
+allow_hedging: false
+
+# --- Per-trade risk -------------------------------------------------
+# 0.5% = $500. Phase 0 §6 arithmetic: six consecutive full losses is
+# $3,000, which IS the daily limit - hence max_losses_per_day below.
+# Phase 9 is expected to lower this toward 0.25%.
+risk_pct: 0.5
+max_risk_per_trade_pct: 0.5
+
+# --- Daily limits ---------------------------------------------------
+# Firm rule: 3% of max(previous EOD equity, balance). Hard breach.
+# The 0.5% buffer means the engine refuses at 2.5%, so a slipped fill
+# or an unexpected swap cannot cross the real line.
+daily_loss_limit_pct: 3.0
+daily_loss_buffer_pct: 0.5
+
+# Three losses at 0.5% is 1.5%, half the daily allowance. Stops a bad
+# day before the daily rule has to.
+max_losses_per_day: 3
+
+# --- Account floor --------------------------------------------------
+# Firm rule: $10,000 below the initial balance -> $90,000.
+# The engine refuses at $90,500.
+max_loss_floor: 90000.0
+max_loss_floor_buffer: 500.0
+
+# --- Cost control ---------------------------------------------------
+max_spread_pct_of_stop: 20.0
+
+# --- Correlated exposure --------------------------------------------
+# Tighter than demo: a correlated cluster is the fastest route to a
+# daily breach on a funded account.
+max_net_exposure_r: 1.5
+
+exposure_weights:
+  EURUSD: 1.0
+  GBPUSD: 1.0
+  XAUUSD: 0.8
+  BTCUSD: 0.6
+  USDJPY: -1.0
+  USDCAD: -1.0
+  USDCHF: -1.0
+  AUDUSD: 1.0
+  NZDUSD: 1.0
+
+# --- News -----------------------------------------------------------
+# Firm rule is +/-2 minutes, execution only. +/-15 is a deliberate
+# superset: it costs a handful of entries and removes any argument
+# about which side of the line a fill landed on.
+news_blackout_pre_min: 15
+news_blackout_post_min: 15
+news_min_importance: high
+
+# --- Session / holding ----------------------------------------------
+# Microscalping is prohibited; one bar minimum holding time.
+min_holding_bars: 1
+flatten_before_weekend_min: 30
+trading_windows: []

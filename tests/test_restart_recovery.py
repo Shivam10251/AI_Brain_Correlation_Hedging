@@ -108,9 +108,15 @@ def boot():
         "backend", "backend.config",
         "backend.database", "backend.database.connection",
         "backend.database.repository", "backend.database.analytics",
+        "backend.database.repo_meta", "backend.database.repo_ledger",
         "backend.ai", "backend.ai.brain", "backend.ai.memory",
+        "backend.ai.versioning",
         "backend.market", "backend.market.news",
         "backend.market.data_engine", "backend.market.execution",
+        "backend.market.broker_profile",
+        "backend.risk", "backend.risk.engine", "backend.risk.money",
+        "backend.risk.profiles", "backend.risk.exposure",
+        "backend.risk.killswitch",
         "backend.core", "backend.core.engine", "backend.core.runtime",
         "backend.core.reconciler",
     ]:
@@ -127,6 +133,23 @@ def boot():
     initialize_database()
 
     engine_module.connect_mt5()
+
+    # Phase 1 put broker-profile capture in main.py's lifespan, and
+    # Phase 3's risk engine refuses any trade it cannot price. A boot
+    # that skips the capture is not modelling a real process start, so
+    # do it here too.
+    from backend.market import broker_profile
+    from backend.risk import profiles as risk_profiles
+
+    risk_profiles.reset_cache()
+
+    profile = broker_profile.capture()
+
+    if profile.get("available"):
+        engine_module.bot_state["account_id"] = profile["account_id"]
+        engine_module.bot_state["server_utc_offset_min"] = (
+            profile["server_utc_offset_min"]
+        )
 
     return engine_module
 
@@ -519,7 +542,11 @@ SIGNAL_SCRIPT.append({
     "reasoning": "Bearish structure. Momentum agrees.",
 })
 
-run_cycle(engine, symbols=["EURUSDm"])
+# GBPUSDm, not EURUSDm: by this point EURUSDm carries an open BUY from
+# the adoption test above, and Phase 3's hedging ban would refuse the
+# SELL before it ever reached MT5 - so nothing would be rejected and
+# this check would be testing the wrong thing.
+run_cycle(engine, symbols=["GBPUSDm"])
 
 fake_mt5.world.reject_orders = False
 

@@ -22,6 +22,10 @@ numpy==2.5.3
 
 requests==2.34.2
 
+# Risk profiles are YAML (Specs/risk/*.yaml) so limits are
+# reviewable in a diff rather than buried in code (Phase 3).
+PyYAML==6.0.3
+
 
 # ---------------------------------------------------------------------
 # Windows trading host only

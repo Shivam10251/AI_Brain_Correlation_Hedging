@@ -47,6 +47,9 @@ bot_state = {
     "server_utc_offset_min": None,
     "margin_mode": None,
     "strategy_version_id": None,
+
+    # Phase 3: which rulebook is gating orders.
+    "risk_profile": None,
 }
 
 
