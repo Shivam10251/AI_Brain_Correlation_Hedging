@@ -3,6 +3,28 @@ import pandas as pd
 
 
 # =====================================================================
+# FEATURE VERSION
+#
+# Bumped whenever a feature FORMULA changes, so a stored row can always
+# be attributed to the maths that produced it. Without this, a fixed
+# formula silently reinterprets every historical label and any study
+# spanning the change is comparing two different measurements.
+#
+#   1.0.0  original (Phase 0 baseline)
+#   1.1.0  Phase 4: closed bars only; market_regime uses both frames
+# =====================================================================
+
+FEATURE_VERSION = "1.1.0"
+
+
+# Bars requested per timeframe. Position 1, not 0, so the forming bar
+# is excluded (Phase 4).
+DAILY_BARS = 10
+
+HOURLY_BARS = 24
+
+
+# =====================================================================
 # SERVER TIME
 #
 # Phase 0 §2.2: bar times were being labelled UTC. MT5 returns them in
@@ -209,16 +231,18 @@ def _market_structure(df):
     return "compressing"
 
 
-def _market_regime(daily_df, hourly_df):
+def _efficiency_ratio(df):
     """
-    Trending vs ranging, from how much of the total travelled distance
-    turned into net directional movement (an efficiency ratio).
+    Kaufman efficiency ratio: net directional movement divided by total
+    distance travelled.
+
+    1.0 is a straight line; near 0 is pure noise.
     """
 
-    closes = hourly_df["close"].tolist()
+    closes = df["close"].tolist()
 
     if len(closes) < 3:
-        return "unknown"
+        return None
 
     net_movement = abs(closes[-1] - closes[0])
 
@@ -228,14 +252,52 @@ def _market_regime(daily_df, hourly_df):
     )
 
     if total_movement == 0:
+        return 0.0
+
+    return net_movement / total_movement
+
+
+def _market_regime(daily_df, hourly_df):
+    """
+    Trending vs ranging, from BOTH timeframes (Phase 4).
+
+    Phase 0 §A15 and B7: the signature took a daily frame and ignored
+    it, computing the regime from H1 alone. The label therefore claimed
+    to describe the market's character while measuring one hour of it,
+    and it disagreed with the daily trend label sitting next to it in
+    the same prompt.
+
+    Documented combination: the GEOMETRIC MEAN of the two efficiency
+    ratios. Chosen over an average because it penalises disagreement -
+    a market that is clean on the daily and pure noise on H1 is not
+    "half trending", it is choppy, and the geometric mean says so.
+
+        combined = sqrt(er_daily * er_h1)
+
+    Thresholds are unchanged, so the label vocabulary and everything
+    downstream that slices on it still mean the same thing.
+    """
+
+    er_daily = _efficiency_ratio(daily_df)
+    er_hourly = _efficiency_ratio(hourly_df)
+
+    if er_hourly is None:
+        return "unknown"
+
+    if er_daily is None:
+        # Not enough daily history: fall back to H1 rather than
+        # refusing to label at all.
+        combined = er_hourly
+    else:
+        combined = (er_daily * er_hourly) ** 0.5
+
+    if combined == 0.0:
         return "flat"
 
-    efficiency = net_movement / total_movement
-
-    if efficiency > 0.45:
+    if combined > 0.45:
         return "trending"
 
-    if efficiency < 0.20:
+    if combined < 0.20:
         return "ranging"
 
     return "choppy"
@@ -375,6 +437,9 @@ def compute_features(daily_df, hourly_df, tick, symbol_info,
         "market_regime": _market_regime(daily_df, hourly_df),
 
         # Session is derived from UTC, not from raw server time.
+        "efficiency_ratio_daily": _efficiency_ratio(daily_df),
+        "efficiency_ratio_h1": _efficiency_ratio(hourly_df),
+
         "session": _session(last_bar_utc),
         "session_basis": "utc" if offset_minutes is not None else "server_time",
 
@@ -386,6 +451,10 @@ def compute_features(daily_df, hourly_df, tick, symbol_info,
 
         "digits": symbol_info.digits if symbol_info else None,
         "point": symbol_info.point if symbol_info else None,
+
+        # Which formulas produced the numbers above (Phase 4).
+        "feature_version": FEATURE_VERSION,
+        "bars_closed_only": True,
     }
 
 
@@ -463,11 +532,17 @@ def fetch_multi_timeframe_data(symbol):
     # ---------------------------------------------------------
     # 1. Fetch Daily data - last 10 candles
     # ---------------------------------------------------------
+    # Position 1, not 0 (Phase 4). Position 0 is the bar still being
+    # formed: its high, low and close change every tick, so every
+    # feature derived from it changed every 30 seconds while the
+    # underlying market had not produced new information. That is
+    # Phase 0 weakness #7 - unstable labels and intra-bar
+    # contamination of every downstream slice.
     daily_rates = mt5.copy_rates_from_pos(
         symbol,
         mt5.TIMEFRAME_D1,
-        0,
-        10
+        1,
+        DAILY_BARS
     )
 
     if daily_rates is None or len(daily_rates) == 0:
@@ -495,8 +570,8 @@ def fetch_multi_timeframe_data(symbol):
     hourly_rates = mt5.copy_rates_from_pos(
         symbol,
         mt5.TIMEFRAME_H1,
-        0,
-        24
+        1,
+        HOURLY_BARS
     )
 
     if hourly_rates is None or len(hourly_rates) == 0:
@@ -550,6 +625,10 @@ def fetch_multi_timeframe_data(symbol):
     # ---------------------------------------------------------
     # 6. Return everything
     # ---------------------------------------------------------
+    # Phase 4: keep the RAW rows so the decision can be replayed
+    # offline, exactly, without a single new API call.
+    from backend.market import replay
+
     return {
         "symbol": symbol,
         "daily_csv": daily_csv,
@@ -560,4 +639,15 @@ def fetch_multi_timeframe_data(symbol):
         "features": features,
         "account": account,
         "server_utc_offset_min": offset_minutes,
+
+        "snapshot": {
+            "symbol": symbol,
+            "feature_version": FEATURE_VERSION,
+            "server_utc_offset_min": offset_minutes,
+            "daily": replay.rates_to_records(daily_rates),
+            "hourly": replay.rates_to_records(hourly_rates),
+            "tick": replay.tick_to_record(tick),
+            "symbol_info": replay.symbol_info_to_record(symbol_info),
+            "features": features,
+        },
     }

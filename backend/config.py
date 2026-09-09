@@ -116,6 +116,26 @@ DEEPSEEK_TEMPERATURE = _env_float("DEEPSEEK_TEMPERATURE", 0.1)
 
 DEFAULT_INTERVAL = _env_int("DEFAULT_INTERVAL", 30)
 
+# ---------------------------------------------------------------------
+# Decision cadence (Phase 4)
+#
+# 'per_bar'  decide for a symbol only when its H1 bar advances.
+# 'interval' the original behaviour, kept as an experiment arm (E2).
+#
+# The data changes hourly. At 30s the bot made ~120 decisions per bar
+# on the same 34 candles - Phase 0 weakness #6: model noise, ~11,500
+# API calls a day, and a microscalping profile both prop firms
+# prohibit. per_bar gives ~96 decisions/day across four symbols.
+# ---------------------------------------------------------------------
+
+DECISION_MODE = os.getenv("DECISION_MODE", "per_bar").strip().lower()
+
+if DECISION_MODE not in {"per_bar", "interval"}:
+    DECISION_MODE = "per_bar"
+
+# How often per_bar mode LOOKS for a new bar. Not how often it decides.
+DECISION_POLL_SECONDS = _env_int("DECISION_POLL_SECONDS", 15)
+
 # Minimum seconds between equity snapshots, so a 30s cycle over four
 # symbols doesn't write four near-identical rows.
 EQUITY_SNAPSHOT_MIN_SECONDS = _env_int("EQUITY_SNAPSHOT_MIN_SECONDS", 60)

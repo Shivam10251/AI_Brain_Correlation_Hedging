@@ -35,7 +35,7 @@ Specs/
 | 1 — foundation, versioning, broker profile, safety | Code complete; live checks in `decisions/phase1_windows_verification.md` |
 | 2 — money risk and daily ledger | Code complete; live checks in `decisions/phase2_windows_verification.md` |
 | 3 — Risk Engine v1 | Code complete; live checks in `decisions/phase3_windows_verification.md` |
-| 4 — data engine and cadence | Not started |
+| 4 — data engine and cadence | Code complete; live checks in `decisions/phase4_windows_verification.md` |
 | 5 — sizing and exits | Not started |
 | 6 — demo calibration | **GATE** — needs a 4–8 week live demo run |
 | 7–12 | Blocked behind the Phase 6 gate |

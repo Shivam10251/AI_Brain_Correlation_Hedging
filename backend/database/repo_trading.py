@@ -25,6 +25,8 @@ DECISION_COLUMNS = (
     "account_id",
     # Phase 3 - risk verdict
     "risk_checks_json", "risk_profile_id",
+    # Phase 4 - feature provenance
+    "feature_version", "bar_time_utc",
     "trade_id",
 )
 
@@ -78,6 +80,10 @@ def insert_decision(decision):
         # from the row without needing the logs.
         "risk_checks_json": _json(decision.get("risk_checks")),
         "risk_profile_id": decision.get("risk_profile_id"),
+
+        # Phase 4: feature provenance
+        "feature_version": decision.get("feature_version"),
+        "bar_time_utc": decision.get("bar_time_utc"),
 
         "trade_id": decision.get("trade_id"),
     }

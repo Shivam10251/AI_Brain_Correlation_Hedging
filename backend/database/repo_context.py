@@ -81,6 +81,15 @@ def insert_market_state(state):
         "session": state.get("session"),
         "features_json": _json(state.get("features")),
         "account_id": state.get("account_id") or current_account_id(),
+
+        # Phase 4: which formulas, and which bar.
+        "feature_version": (state.get("features") or {}).get(
+            "feature_version"
+        ),
+        "bar_time_utc": (state.get("features") or {}).get("bar_time_utc"),
+        "bar_time_server": (state.get("features") or {}).get(
+            "bar_time_server"
+        ),
     }
 
     return _insert("market_states", data)
@@ -247,3 +256,77 @@ def get_state(key, default=None):
         return json.loads(row["value"])
     except (TypeError, ValueError):
         return default
+
+
+# =====================================================================
+# DECISION BAR SNAPSHOTS (Phase 4)
+# =====================================================================
+
+def insert_decision_bars(decision_id, snapshot):
+    """
+    Store the exact bars one decision saw.
+
+    Silently skipped when there is no snapshot - a missing snapshot
+    must never cost a trade. The row is keyed UNIQUE on decision_id, so
+    a retry cannot duplicate it.
+    """
+
+    if not snapshot:
+        return None
+
+    try:
+        return _insert("decision_bars", {
+            "created_at": utc_now(),
+            "decision_id": decision_id,
+            "symbol": snapshot.get("symbol"),
+            "feature_version": snapshot.get("feature_version"),
+            "server_utc_offset_min": snapshot.get("server_utc_offset_min"),
+            "daily_json": _json(snapshot.get("daily")),
+            "hourly_json": _json(snapshot.get("hourly")),
+            "tick_json": _json(snapshot.get("tick")),
+            "symbol_info_json": _json(snapshot.get("symbol_info")),
+            "features_json": _json(snapshot.get("features")),
+        })
+    except Exception:                               # noqa: BLE001
+        # UNIQUE(decision_id), or a locked database. Never fatal.
+        return None
+
+
+def get_decision_bars(decision_id):
+    row = get_connection().execute(
+        "SELECT * FROM decision_bars WHERE decision_id = ?", (decision_id,)
+    ).fetchone()
+
+    return dict(row) if row else None
+
+
+def get_decision_bars_batch(symbol=None, limit=100):
+    sql = "SELECT * FROM decision_bars"
+    params = []
+
+    if symbol:
+        sql += " WHERE symbol = ?"
+        params.append(symbol)
+
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+
+    return _rows(get_connection().execute(sql, params))
+
+
+def latest_decided_bar(symbol):
+    """
+    The newest H1 bar this symbol has already been decided on.
+
+    Read from the database rather than held in memory, so per-bar
+    cadence survives a restart without any extra state to persist or
+    get out of sync.
+    """
+
+    row = get_connection().execute(
+        "SELECT MAX(bar_time_utc) AS bar FROM market_states "
+        "WHERE symbol = ? AND bar_time_utc IS NOT NULL",
+        (symbol,),
+    ).fetchone()
+
+    return row["bar"] if row else None
