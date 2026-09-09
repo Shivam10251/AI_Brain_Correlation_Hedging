@@ -121,10 +121,32 @@ def close_connection():
 #   * safe to run on every startup, forever
 ADDITIVE_COLUMNS = {
     # Phase 1 - decision reproducibility
+    # Phase 2 - account attribution
     "decisions": (
         ("prompt_hash", "TEXT"),
         ("temperature", "REAL"),
         ("strategy_version_id", "INTEGER"),
+        ("account_id", "INTEGER"),
+    ),
+
+    # Phase 2 - money risk and account attribution
+    "trades": (
+        ("stop_distance_price", "REAL"),
+        ("stop_distance_effective", "REAL"),
+        ("spread_at_entry", "REAL"),
+        ("account_id", "INTEGER"),
+    ),
+
+    "equity_snapshots": (
+        ("account_id", "INTEGER"),
+    ),
+
+    "market_states": (
+        ("account_id", "INTEGER"),
+    ),
+
+    "events": (
+        ("account_id", "INTEGER"),
     ),
 }
 
