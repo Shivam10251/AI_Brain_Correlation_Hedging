@@ -76,7 +76,16 @@ backend/
 
 frontend/templates/  index.html (engine), dashboard.html (DB explorer)
 data/quantbot.db     runtime, gitignored
-Specs/               plans, decisions, research  <- read before building
+
+Specs/               how to BUILD it  <- read before building
+  MT5_Build_Plan.md    the active 12-phase plan
+  decisions/           phase sign-offs, runbooks
+  risk/                profile YAML - loaded by backend/risk/profiles.py
+  news/ research/      placeholders the plan names by filename
+
+Knowledge/           how to UNDERSTAND it
+  source/              the original briefs, as PDFs. Append-only
+  explainers/          written answers to "what is happening?"
 ```
 
 ---
@@ -131,6 +140,23 @@ Specs/               plans, decisions, research  <- read before building
 - Run `pytest` after any change. All 79 legacy checks must stay green.
 - Trading-behaviour changes ship as a **new strategy version**, never
   as an in-place edit to a running one.
+
+## Explaining the system
+
+When asked what is happening, how a subsystem works, why something
+behaves as it does, or for a status write-up — **write the answer to a
+file in `Knowledge/explainers/`**, then summarise it in the reply. Do
+not leave it only in terminal output that scrolls away.
+
+- Name it `YYYY-MM-DD-short-slug.md`.
+- Open it with the commit sha it describes, so a stale explainer is
+  visibly stale rather than quietly wrong.
+- Add a row to the table in `Knowledge/README.md`.
+- These are snapshots. When something changes materially, write a new
+  one; do not edit an old one to match today.
+
+This does not apply to a one-line factual answer, or to advice the user
+will act on immediately — those stay in the reply.
 
 ## Phases
 

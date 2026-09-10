@@ -1,7 +1,4 @@
 Placeholder, so git tracks this directory before the phase that fills it.
 
-  architecture  module contracts and data-flow notes (ongoing)
-  risk          risk profile YAML (Phase 3)
-  news          CalendarExport.mq5 + currency map (Phase 7)
-  data          bar store / dataset notes (Phase 8)
-  research      experiment reports (Phase 6 onward)
+Phase 6 puts E1_calibration.md here; Phase 9 puts robustness_v1.md.
+See ../README.md for the whole layout.
