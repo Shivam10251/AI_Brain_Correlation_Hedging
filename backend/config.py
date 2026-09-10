@@ -36,6 +36,9 @@ SYMBOLS = [
     "EURUSD",
     "GBPUSD",
     "XAUUSD",
+    "USDJPY",
+    "AUDUSD",
+    "USDCAD"
 ]
 
 # Override with a comma-separated SYMBOLS env var if you want to change

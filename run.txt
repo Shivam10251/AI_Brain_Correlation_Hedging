@@ -1,1 +1,30 @@
+START THE BACKEND
+
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+Open : http://127.0.0.1:8000
+
+The data/ folder and data/quantbot.db are created automatically the
+first time the backend starts. The engine comes up stopped - press
+Start on the dashboard to begin analysis cycles.
+
+
+EXPORT THE DATABASE TO A BROWSABLE HTML PAGE
+
+.venv\Scripts\python.exe scripts\export_db.py --open
+
+Writes data/db_explorer.html and opens it in the browser. The page
+carries a frozen copy of the rows, so re-run this whenever you want
+fresh data. Reading is read-only, so it is safe to run while the bot
+is trading.
+
+Safe to share or commit - strips the MT5 login, hostname and PID
+while keeping every decision, trade, price and equity row:
+
+.venv\Scripts\python.exe scripts\export_db.py --redact
+
+Other flags:
+
+  --out <path>    write somewhere other than data/db_explorer.html
+  --db <path>     export a different database file
+  --fragment      omit the <!doctype>/<head> wrapper, for publishing

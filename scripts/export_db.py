@@ -125,6 +125,74 @@ def read_database(db_path):
 
 
 # ---------------------------------------------------------------------
+# Redaction
+# ---------------------------------------------------------------------
+
+REDACTED = "REDACTED"
+
+
+def _scrub_strings(node, secrets):
+    """Replace every occurrence of a secret inside nested strings."""
+
+    if isinstance(node, str):
+        for secret in secrets:
+            node = node.replace(secret, REDACTED)
+
+        return node
+
+    if isinstance(node, list):
+        return [_scrub_strings(item, secrets) for item in node]
+
+    if isinstance(node, dict):
+        return {k: _scrub_strings(v, secrets) for k, v in node.items()}
+
+    return node
+
+
+def redact(payload):
+    """
+    Remove account- and machine-identifying values.
+
+    The trading data itself (decisions, trades, prices, equity) is kept -
+    only the MT5 login, the hostname and the PID are stripped, so the
+    export is safe to share or commit to a public repository.
+    """
+
+    secrets = set()
+
+    for row in payload["tables"].get("equity_snapshots", []):
+        if row.get("account_login") is not None:
+            secrets.add(str(row["account_login"]))
+            row["account_login"] = None
+
+    for row in payload["tables"].get("engine_state", []):
+        if row.get("key") != "engine_lock" or not row.get("value"):
+            continue
+
+        try:
+            lock = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+
+        if lock.get("host"):
+            secrets.add(str(lock["host"]))
+            lock["host"] = REDACTED
+
+        if lock.get("pid") is not None:
+            lock["pid"] = 0
+
+        row["value"] = json.dumps(lock)
+
+    # Catch the same values anywhere else they were recorded.
+    if secrets:
+        payload["tables"] = _scrub_strings(payload["tables"], secrets)
+
+    payload["meta"]["redacted"] = True
+
+    return payload
+
+
+# ---------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------
 
@@ -194,6 +262,12 @@ def main():
              "Artifact instead of opening locally",
     )
     parser.add_argument(
+        "--redact",
+        action="store_true",
+        help="strip the MT5 login, hostname and PID, so the export is "
+             "safe to share or commit publicly",
+    )
+    parser.add_argument(
         "--open",
         action="store_true",
         dest="open_after",
@@ -211,6 +285,9 @@ def main():
         )
 
     payload = read_database(db_path)
+
+    if args.redact:
+        payload = redact(payload)
 
     out_path = Path(args.out).expanduser()
 
@@ -232,8 +309,10 @@ def main():
     print("Wrote   {}  ({:.1f} KB)".format(
         out_path, out_path.stat().st_size / 1024
     ))
-    print("Rows    {} across {} tables".format(
-        total, len(payload["tables"])
+    print("Rows    {} across {} tables{}".format(
+        total,
+        len(payload["tables"]),
+        "  (redacted)" if args.redact else "",
     ))
 
     for name in sorted(counts):
