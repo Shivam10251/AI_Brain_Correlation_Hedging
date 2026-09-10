@@ -56,6 +56,20 @@ if os.getenv("SYMBOLS"):
 SL_PERCENT = _env_float("SL_PERCENT", 0.002)   # 0.20%
 TP_PERCENT = _env_float("TP_PERCENT", 0.004)   # 0.40%
 
+# Phase 5: stop placement is a VERSIONED strategy parameter.
+#   percent  v1.0.0 baseline - fixed % of price. Frozen for Phase 6.
+#   atr      v1.1.0 - k x ATR14(H1), so the distance scales with the
+#            instrument's own volatility. Adopted only if Phase 8
+#            replay (E3) shows it improves expectancy.
+STOP_MODEL = os.getenv("STOP_MODEL", "percent").strip().lower()
+
+ATR_SL_MULTIPLE = _env_float("ATR_SL_MULTIPLE", 1.0)
+ATR_TP_MULTIPLE = _env_float("ATR_TP_MULTIPLE", 2.0)
+
+# Phase 5: risk-based sizing replaces the fixed lot. LOT_SIZE remains
+# the fallback for when the broker specification is unavailable.
+POSITION_SIZING = os.getenv("POSITION_SIZING", "risk").strip().lower()
+
 LOT_SIZE = _env_float("LOT_SIZE", 0.01)
 
 MAGIC_NUMBER = _env_int("MAGIC_NUMBER", 100001)

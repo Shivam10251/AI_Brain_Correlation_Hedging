@@ -23,7 +23,7 @@ import MetaTrader5 as mt5
 
 from backend import auth, config
 from backend.ai import versioning
-from backend.core import engine
+from backend.core import engine, exits
 from backend.core.engine import bot_state
 from backend.database import analytics, explorer, initialize_database
 from backend.database import repo_ledger, repo_meta
@@ -491,15 +491,27 @@ async def risk_halt(request: HaltRequest):
     flattened = None
 
     if action == "halt" and request.flatten:
-        # Phase 5 owns the close path. Until it exists, say so plainly
-        # rather than reporting a flatten that did not happen.
-        flattened = {
-            "status": "unavailable",
-            "message": (
-                "flatten=true requires the Phase 5 close path. New orders "
-                "are blocked; existing positions were NOT closed."
-            ),
-        }
+
+        if not bot_state["mt5_connected"]:
+            flattened = {
+                "status": "unavailable",
+                "message": (
+                    "MT5 is not connected; new orders are blocked but "
+                    "existing positions were NOT closed."
+                ),
+            }
+        else:
+            result = await asyncio.to_thread(
+                exits.flatten_all,
+                exits.KILL,
+                request.reason or "kill switch flatten",
+            )
+
+            flattened = {
+                "status": "ok" if not result["failed"] else "partial",
+                "closed": result["closed"],
+                "failed": result["failed"],
+            }
 
     return {
         "status": "success",

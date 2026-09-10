@@ -141,6 +141,10 @@ ADDITIVE_COLUMNS = {
         ("stop_distance_effective", "REAL"),
         ("spread_at_entry", "REAL"),
         ("account_id", "INTEGER"),
+        # Phase 5 - exit lineage and stop model
+        ("exit_reason", "TEXT"),
+        ("exit_client_order_id", "TEXT"),
+        ("stop_model", "TEXT"),
     ),
 
     "equity_snapshots": (

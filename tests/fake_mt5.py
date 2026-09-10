@@ -156,6 +156,14 @@ class World:
 
         self._offset_calls = 0
 
+        # ---- Phase 5: close behaviour ----
+
+        # When set, a close fills only this many lots at a time, so the
+        # DONE_PARTIAL re-issue path is exercised for real.
+        self.partial_close_volume = None
+
+        self.close_profit_per_lot = 1234.0
+
 
 world = World()
 
@@ -424,9 +432,124 @@ def _filling_supported(symbol, type_filling):
     return True
 
 
+def order_calc_margin(order_type, symbol, volume, price):
+    """Crude but monotonic: margin scales with notional / leverage."""
+
+    if symbol in world.unknown_symbols:
+        return None
+
+    spec = spec_for(symbol)
+
+    notional = float(volume) * float(spec["trade_contract_size"]) * float(price)
+
+    return round(notional / max(1, world.leverage), 2)
+
+
+def _reject_result(comment):
+    return _Result(
+        retcode=TRADE_RETCODE_REJECT, comment=comment,
+        order=0, deal=0, volume=0.0, price=0.0, request_id=1,
+    )
+
+
+def _handle_sltp(request):
+    if world.reject_orders:
+        return _reject_result("Rejected by broker")
+
+    ticket = request.get("position")
+
+    position = world.positions.get(ticket)
+
+    if position is None:
+        return _reject_result("No such position")
+
+    position.sl = request.get("sl", position.sl)
+    position.tp = request.get("tp", position.tp)
+
+    return _Result(
+        retcode=TRADE_RETCODE_DONE, comment="Request executed",
+        order=_ticket(), deal=0, volume=0.0, price=0.0, request_id=1,
+    )
+
+
+def _handle_close(request):
+    """
+    A DEAL carrying `position=<ticket>` closes that position rather
+    than opening a new one - matching real MT5, and the behaviour the
+    Phase 5 close path depends on.
+    """
+
+    if world.reject_orders:
+        return _reject_result("Rejected by broker")
+
+    ticket = request["position"]
+
+    position = world.positions.get(ticket)
+
+    if position is None:
+        return _reject_result("Position not found")
+
+    requested = float(request.get("volume") or position.volume)
+
+    # Optionally fill only part of it, so the partial-close path is
+    # exercised rather than assumed.
+    fill = requested
+
+    if world.partial_close_volume is not None:
+        fill = min(requested, float(world.partial_close_volume))
+
+    fill = min(fill, position.volume)
+
+    price = float(request.get("price") or position.price_open)
+
+    profit = world.close_profit_per_lot * fill
+
+    world.deals.append(_Deal(
+        ticket=_ticket(),
+        order=_ticket(),
+        position_id=ticket,
+        symbol=position.symbol,
+        entry=DEAL_ENTRY_OUT,
+        price=price,
+        volume=fill,
+        profit=profit,
+        commission=-0.10 * fill / 0.01 if fill else 0.0,
+        swap=0.0,
+        comment=request.get("comment", ""),
+        magic=position.magic,
+        time=_server_epoch(),
+    ))
+
+    world.balance += profit
+    world.equity += profit
+
+    position.volume = round(position.volume - fill, 8)
+
+    if position.volume <= 0:
+        world.positions.pop(ticket, None)
+
+    partial = fill < requested
+
+    return _Result(
+        retcode=TRADE_RETCODE_DONE_PARTIAL if partial else TRADE_RETCODE_DONE,
+        comment="Request executed",
+        order=_ticket(),
+        deal=world.deals[-1].ticket,
+        volume=fill,
+        price=price,
+        request_id=1,
+    )
+
+
 def order_send(request):
     if world.order_send_returns_none:
         return None
+
+    if request.get("action") == TRADE_ACTION_SLTP:
+        return _handle_sltp(request)
+
+    if request.get("action") == TRADE_ACTION_DEAL and request.get("position"):
+        return _handle_close(request)
 
     if world.reject_orders:
         return _Result(

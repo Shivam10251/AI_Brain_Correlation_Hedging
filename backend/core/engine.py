@@ -29,13 +29,14 @@ from backend.database import repo_ledger, repo_meta
 from backend.database import repository as repo
 from backend.market import data_engine, news
 from backend.risk import engine as risk_engine
-from backend.risk import killswitch, money
+from backend.risk import killswitch, money, sizing, stops
 from backend.risk import profiles as risk_profiles
 from backend.market.data_engine import fetch_multi_timeframe_data
 from backend.market.execution import execute_trade, new_client_order_id
 
 # Re-exported so `from engine import bot_state` and the existing
 # engine.<name> call sites keep working after the split.
+from backend.core import exits
 from backend.core.runtime import (                  # noqa: F401
     acquire_engine_lock,
     bot_state,
@@ -117,6 +118,15 @@ def apply_risk_checks(symbol, decision, market_data=None, risk=None):
     # the real refusals in noise.
     if decision.get("status") == "ok" and ai_signal not in {"BUY", "SELL"}:
         return ai_signal, None
+
+    # Phase 5: a signal the sizer could not turn into a volume is not
+    # sendable. Refuse here rather than let execute_trade fall back to a
+    # fixed lot downstream - that fallback is the exact breach sizing
+    # exists to prevent (e.g. the minimum lot risks more than the
+    # per-trade budget, or margin is short).
+    if (ai_signal in {"BUY", "SELL"}
+            and (risk or {}).get("sizing_refused")):
+        return "HOLD", f"Sizing refused: {risk['sizing_refused']}"
 
     context = build_risk_context(
         symbol, decision, market_data or {}, risk or {}
@@ -260,12 +270,54 @@ async def process_symbol(symbol, cycle_id):
         symbol,
         decision.get("ai_signal") or "HOLD",
         features,
-        config.LOT_SIZE,
+        volume=None,
+        account=market_data.get("account"),
     ) if decision.get("ai_signal") in {"BUY", "SELL"} else {}
 
-    final_decision, override_reason = apply_risk_checks(
-        symbol, decision, market_data, planned_risk
-    )
+    # Phase 5: a flip closes the existing position instead of opening
+    # the opposite one. Runs BEFORE the gate, because the hedging check
+    # would otherwise refuse the flip and the position would simply be
+    # held - the AI's change of mind silently discarded.
+    reversed_position = False
+
+    if decision.get("status") == "ok" and decision.get("ai_signal") in {
+        "BUY", "SELL"
+    }:
+        try:
+            profile = risk_profiles.load()
+        except Exception:                           # noqa: BLE001
+            profile = None
+
+        reversed_position, reversal_detail = await asyncio.to_thread(
+            exits.handle_reversal,
+            symbol,
+            decision["ai_signal"],
+            decision,
+            profile,
+        )
+
+        if reversed_position:
+            decision["reversal"] = reversal_detail
+
+    if reversed_position:
+        # Do not enter in the same cycle: the close must settle and
+        # reconcile so the next entry is judged on a clean book.
+        #
+        # This falls THROUGH to the persistence below rather than
+        # returning: a reversal cycle is still a decision, and a
+        # decision that is never written has no strategy version
+        # (invariant 9), no decision_bars to replay, and is invisible to
+        # the Phase 6 calibration - which is precisely the population of
+        # flips that study most needs to see.
+        final_decision = "HOLD"
+        override_reason = (
+            f"Closed opposing position on reversal to "
+            f"{decision['ai_signal']}; entry deferred to the next bar."
+        )
+    else:
+        final_decision, override_reason = apply_risk_checks(
+            symbol, decision, market_data, planned_risk
+        )
 
     decision["final_decision"] = final_decision
     decision["override_reason"] = override_reason
@@ -323,48 +375,115 @@ async def process_symbol(symbol, cycle_id):
     return decision
 
 
-def plan_risk(symbol, signal, features, volume):
+def plan_risk(symbol, signal, features, volume=None, account=None):
     """
-    Work out what this trade puts at stake, BEFORE it is sent (Phase 2).
+    Price and size the trade BEFORE it is sent (Phases 2 and 5).
 
-    The stop is derived here with the same maths execution.py uses, so
-    the recorded risk describes the order that is actually about to go
-    out rather than an approximation of it.
+    Order matters here:
 
-    Returns the risk fields for the trade intent. `risk_amount` is None
-    when the broker specification is missing - reported honestly rather
-    than guessed, because the Phase 3 risk engine must be able to tell
-    "no stop specification" apart from "zero risk".
+      1. place the stop (versioned model, broker minimum respected)
+      2. size the position so that stop costs the profile's budget
+      3. re-price the risk at the volume actually chosen
+
+    Sizing has to follow stop placement, not precede it: volume is a
+    function of the stop distance, so a fixed lot with a variable stop
+    puts a different amount at risk on every trade - Phase 0
+    weakness #4.
+
+    `risk_amount` is None when the broker specification is missing.
+    Reported honestly rather than guessed, because the Phase 3 engine
+    must be able to tell "unpriced" from "zero risk" and refuses on the
+    former.
     """
 
     entry = features.get("ask") if signal == "BUY" else features.get("bid")
 
     if entry is None:
-        return {"risk_amount": None}
+        return {"risk_amount": None, "volume": volume}
 
-    if signal == "BUY":
-        stop = entry * (1 - config.SL_PERCENT)
-    else:
-        stop = entry * (1 + config.SL_PERCENT)
-
-    profile = None
+    symbol_profile = None
 
     account_id = bot_state.get("account_id")
 
     if account_id is not None:
-        profile = repo_meta.get_symbol_profile(account_id, symbol)
+        symbol_profile = repo_meta.get_symbol_profile(account_id, symbol)
 
+    # ---- 1. Stop placement (versioned) ------------------------------
+    placement = stops.compute(
+        entry,
+        signal,
+        model=config.STOP_MODEL,
+        sl_percent=config.SL_PERCENT,
+        tp_percent=config.TP_PERCENT,
+        atr=features.get("atr_h1"),
+        k_sl=config.ATR_SL_MULTIPLE,
+        k_tp=config.ATR_TP_MULTIPLE,
+        symbol_profile=symbol_profile,
+    )
+
+    stop = placement["stop_loss"]
+
+    # ---- 2. Sizing --------------------------------------------------
+    chosen_volume = volume
+    sizing_detail = None
+
+    if config.POSITION_SIZING == "risk" and account and symbol_profile:
+
+        try:
+            profile = risk_profiles.load()
+        except Exception:                           # noqa: BLE001
+            profile = None
+
+        if profile:
+            sizing_detail = sizing.plan(
+                symbol,
+                signal,
+                entry,
+                placement["stop_distance"],
+                profile,
+                account,
+                symbol_profile,
+            )
+
+            if sizing_detail.get("volume"):
+                chosen_volume = sizing_detail["volume"]
+            else:
+                # Sized to nothing - the minimum lot already risks more
+                # than allowed, or margin is short. Do NOT silently
+                # fall back to a fixed lot: that is the breach the
+                # sizing exists to prevent.
+                return {
+                    "risk_amount": sizing_detail.get("risk_amount"),
+                    "volume": None,
+                    "sizing": sizing_detail,
+                    "planned_entry": entry,
+                    "planned_stop_loss": stop,
+                    "stop_model": placement["model_used"],
+                    "sizing_refused": sizing_detail.get("reason"),
+                }
+
+    if chosen_volume is None:
+        chosen_volume = config.LOT_SIZE
+
+    # ---- 3. Price the trade at the volume actually chosen -----------
     described = money.describe(
         entry_price=entry,
         stop_loss=stop,
         direction=signal,
-        volume=volume,
+        volume=chosen_volume,
         spread=features.get("spread"),
-        symbol_profile=profile,
+        symbol_profile=symbol_profile,
     )
 
-    described["planned_stop_loss"] = stop
-    described["planned_entry"] = entry
+    described.update({
+        "volume": chosen_volume,
+        "planned_entry": entry,
+        "planned_stop_loss": stop,
+        "planned_take_profit": placement["take_profit"],
+        "stop_model": placement["model_used"],
+        "stop_clamped": placement["clamped"],
+        "sizing": sizing_detail,
+    })
 
     return described
 
@@ -403,9 +522,10 @@ async def execute_and_record(symbol, signal, decision, market_data,
         "client_order_id": client_order_id,
         "symbol": symbol,
         "direction": signal,
-        "volume": config.LOT_SIZE,
+        "volume": risk.get("volume") or config.LOT_SIZE,
         "requested_price": features.get("ask") if signal == "BUY"
         else features.get("bid"),
+        "stop_model": risk.get("stop_model"),
         "reason": decision.get("reasoning"),
         "decision_id": decision.get("id"),
         "magic": config.MAGIC_NUMBER,
@@ -424,8 +544,17 @@ async def execute_and_record(symbol, signal, decision, market_data,
 
     repo.update_decision(decision["id"], trade_id=trade_id)
 
+    # Phase 5: the order goes out at the sized volume and the versioned
+    # stop, not a fixed lot and a percent stop. Falls back inside
+    # execute_trade when these are None.
     result = await asyncio.to_thread(
-        execute_trade, symbol, signal, client_order_id
+        execute_trade,
+        symbol,
+        signal,
+        client_order_id,
+        risk.get("volume"),
+        risk.get("planned_stop_loss"),
+        risk.get("planned_take_profit"),
     )
 
     status = result.get("status")
@@ -590,6 +719,19 @@ async def run_cycle(cycle_id, symbols):
     refresh_cache()
 
 
+def run_scheduled_exits():
+    """Profile-driven flatten windows (Phase 5)."""
+
+    try:
+        profile = risk_profiles.load()
+    except Exception:                               # noqa: BLE001
+        return None
+
+    return exits.run_scheduled_exits(
+        profile, bot_state.get("server_utc_offset_min")
+    )
+
+
 async def trading_loop():
     """
     Main AI trading loop.
@@ -644,6 +786,14 @@ async def trading_loop():
             await asyncio.to_thread(run_full_reconciliation)
         except Exception as error:                  # noqa: BLE001
             print(f"[ERROR] reconciliation: {error}")
+
+        # Phase 5: time-driven exits run on EVERY poll, in both modes.
+        # A flatten that only fires when a bar closes is a flatten that
+        # misses its window.
+        try:
+            await asyncio.to_thread(run_scheduled_exits)
+        except Exception as error:                  # noqa: BLE001
+            print(f"[ERROR] scheduled exits: {error}")
 
         if per_bar:
             due = []

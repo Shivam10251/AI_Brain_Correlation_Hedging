@@ -257,6 +257,7 @@ def close_finished_trades():
             swap=settlement["swap"],
             result=_classify(settlement["pnl"]),
             r_multiple=r_multiple,
+            exit_reason=_infer_exit_reason(trade, exit_price),
         )
 
         settled = repo.get_trade(trade["id"])
@@ -291,6 +292,68 @@ def close_finished_trades():
         closed += 1
 
     return closed
+
+
+# How close to the stop/target counts as "that is what happened".
+# A stop-out fills at or near the level, never exactly on it.
+EXIT_PRICE_TOLERANCE = 0.35
+
+
+def _infer_exit_reason(trade, exit_price):
+    """
+    Why the trade ended (Phase 5).
+
+    An exit the bot initiated has already stamped its reason on the row
+    before sending the close, so that wins. Anything else was the
+    broker: compare where it actually filled against the stop and the
+    target, and take whichever it landed nearer, as a fraction of the
+    stop distance.
+
+    Falls back to MANUAL rather than guessing - a position closed from
+    the terminal is a real category, and mislabelling it SL would
+    poison the exit-reason breakdown Phase 6 reads.
+    """
+
+    existing = trade.get("exit_reason")
+
+    if existing and existing not in {"SL", "TP"}:
+        # REVERSAL / FLATTEN / KILL were set by the exit manager.
+        return existing
+
+    stop = trade.get("stop_loss")
+    target = trade.get("take_profit")
+
+    if exit_price is None:
+        return existing or "MANUAL"
+
+    distance = trade.get("stop_distance_price")
+
+    if not distance and stop is not None and trade.get("entry_price"):
+        distance = abs(float(trade["entry_price"]) - float(stop))
+
+    if not distance:
+        return existing or "MANUAL"
+
+    tolerance = float(distance) * EXIT_PRICE_TOLERANCE
+
+    to_stop = abs(float(exit_price) - float(stop)) if stop else None
+    to_target = abs(float(exit_price) - float(target)) if target else None
+
+    candidates = [
+        (to_stop, "SL"),
+        (to_target, "TP"),
+    ]
+
+    nearest = min(
+        (c for c in candidates if c[0] is not None),
+        default=(None, None),
+        key=lambda c: c[0],
+    )
+
+    if nearest[0] is not None and nearest[0] <= tolerance:
+        return nearest[1]
+
+    return existing or "MANUAL"
 
 
 def _apply_to_ledger(settled, settlement):

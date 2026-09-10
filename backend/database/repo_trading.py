@@ -166,6 +166,7 @@ def insert_trade_intent(trade):
         "stop_distance_price": trade.get("stop_distance_price"),
         "stop_distance_effective": trade.get("stop_distance_effective"),
         "spread_at_entry": trade.get("spread_at_entry"),
+        "stop_model": trade.get("stop_model"),
 
         "account_id": trade.get("account_id") or current_account_id(),
         "reason": trade.get("reason"),

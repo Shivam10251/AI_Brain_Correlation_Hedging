@@ -806,18 +806,21 @@ class TestKillSwitchApi:
 
         assert response.json()["kill_switch"]["active"] is False
 
-    def test_flatten_is_honest_about_not_being_implemented(self, client):
+    def test_flatten_reports_what_it_actually_closed(self, client):
         """
-        Phase 5 owns the close path. Reporting a flatten that did not
-        happen would be worse than saying so.
+        Phase 5 implemented the close path, so this now really flattens.
+        With nothing open it must report zero rather than claiming
+        success it did not achieve.
         """
 
         payload = client.post(
             "/api/risk/halt", json={"action": "halt", "flatten": True}
         ).json()
 
-        assert payload["flatten"]["status"] == "unavailable"
-        assert "NOT closed" in payload["flatten"]["message"]
+        assert payload["kill_switch"]["active"] is True
+        assert payload["flatten"]["status"] == "ok"
+        assert payload["flatten"]["closed"] == 0
+        assert payload["flatten"]["failed"] == 0
 
     def test_bad_action_rejected(self, client):
         payload = client.post(

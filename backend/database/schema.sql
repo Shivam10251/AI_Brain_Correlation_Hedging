@@ -251,6 +251,12 @@ CREATE TABLE IF NOT EXISTS trades (
     stop_distance_effective REAL,
     spread_at_entry         REAL,
 
+    -- Phase 5: how the trade ended, and the stop model that placed it.
+    -- SL | TP | REVERSAL | FLATTEN | KILL | MANUAL
+    exit_reason             TEXT,
+    exit_client_order_id    TEXT,
+    stop_model              TEXT,
+
     account_id        INTEGER,
 
     reason            TEXT,

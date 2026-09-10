@@ -177,6 +177,254 @@ def find_deal_by_client_order_id(client_order_id, lookback_seconds=3600):
     return None
 
 
+def find_position(position_ticket):
+    """The live MT5 position for a ticket, or None."""
+
+    positions = mt5.positions_get(ticket=position_ticket)
+
+    return positions[0] if positions else None
+
+
+def close_position(position_ticket, client_order_id=None, volume=None,
+                   reason="MANUAL"):
+    """
+    Close a position through the same idempotent path opens use
+    (Phase 5).
+
+    An opposite-direction DEAL carrying `position=<ticket>`, tagged
+    with a client order id in the comment. That tag is what lets the
+    reconciler answer "did this close reach the broker?" after a crash,
+    exactly as it does for opens - so a restart cannot double-close and
+    accidentally open a reversed position.
+
+    Partial fills are handled by re-issuing for the remainder rather
+    than reporting success: MT5 returns DONE_PARTIAL when only some of
+    the volume filled, and treating that as done would leave a position
+    open that the database believes is closed.
+    """
+
+    client_order_id = client_order_id or new_client_order_id()
+
+    position = find_position(position_ticket)
+
+    if position is None:
+        # Already gone. Idempotent by design: a retry after a crash
+        # must not be an error.
+        return {
+            "status": "ALREADY_CLOSED",
+            "client_order_id": client_order_id,
+            "position_ticket": position_ticket,
+            "reason": "Position is not open in MT5",
+        }
+
+    symbol = position.symbol
+
+    remaining = float(volume if volume is not None else position.volume)
+
+    attempts = []
+
+    # Bounded: a broker that keeps filling one lot at a time must not
+    # spin this forever.
+    for attempt in range(5):
+
+        tick = mt5.symbol_info_tick(symbol)
+
+        if tick is None:
+            return {
+                "status": "FAILED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "reason": f"No tick data for {symbol} | {mt5.last_error()}",
+                "attempts": attempts,
+            }
+
+        is_long = position.type == mt5.POSITION_TYPE_BUY
+
+        order_type = mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY
+
+        price = tick.bid if is_long else tick.ask
+
+        symbol_info = mt5.symbol_info(symbol)
+
+        if symbol_info is not None:
+            price = round(price, symbol_info.digits)
+
+        type_filling, deviation, _ = resolve_execution_params(
+            symbol, price, symbol_info
+        )
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": remaining,
+            "type": order_type,
+            "position": position_ticket,
+            "price": price,
+            "deviation": deviation,
+            "magic": config.MAGIC_NUMBER,
+            "comment": comment_for(client_order_id),
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": type_filling,
+        }
+
+        try:
+            result = mt5.order_send(request)
+        except Exception as error:                  # noqa: BLE001
+            return {
+                "status": "FAILED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "reason": f"order_send raised: {error}",
+                "attempts": attempts,
+            }
+
+        if result is None:
+            # Ambiguous. The reconciler resolves it from deal history
+            # rather than re-sending, same as an open.
+            return {
+                "status": "FAILED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "reason": (
+                    f"order_send returned None | MT5 error: "
+                    f"{mt5.last_error()}"
+                ),
+                "ambiguous": True,
+                "attempts": attempts,
+            }
+
+        payload = _result_payload(result)
+
+        attempts.append(payload)
+
+        if result.retcode not in {
+            mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL
+        }:
+            return {
+                "status": "REJECTED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "reason": (
+                    f"MT5 REJECTED CLOSE | retcode={result.retcode} | "
+                    f"comment={result.comment}"
+                ),
+                "mt5_retcode": result.retcode,
+                "raw_result": payload,
+                "attempts": attempts,
+            }
+
+        filled = float(getattr(result, "volume", 0.0) or 0.0)
+
+        remaining = round(remaining - filled, 8)
+
+        if remaining <= 0:
+            return {
+                "status": "CLOSED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "symbol": symbol,
+                "exit_reason": reason,
+                "mt5_retcode": result.retcode,
+                "deal_ticket": getattr(result, "deal", None),
+                "order_ticket": getattr(result, "order", None),
+                "exit_price": getattr(result, "price", None) or price,
+                "raw_result": payload,
+                "attempts": attempts,
+                "partial_fills": len(attempts) - 1,
+            }
+
+        # DONE_PARTIAL: re-issue for what is left rather than
+        # reporting a close that did not fully happen.
+        position = find_position(position_ticket)
+
+        if position is None:
+            return {
+                "status": "CLOSED",
+                "client_order_id": client_order_id,
+                "position_ticket": position_ticket,
+                "symbol": symbol,
+                "exit_reason": reason,
+                "raw_result": payload,
+                "attempts": attempts,
+                "partial_fills": len(attempts) - 1,
+            }
+
+    return {
+        "status": "FAILED",
+        "client_order_id": client_order_id,
+        "position_ticket": position_ticket,
+        "reason": (
+            f"Position still has {remaining} lots open after "
+            f"{len(attempts)} partial fills"
+        ),
+        "attempts": attempts,
+    }
+
+
+def modify_sltp(position_ticket, stop_loss=None, take_profit=None):
+    """
+    Move a position's stop or target (Phase 5).
+
+    Built now, deliberately NOT enabled: break-even and trailing stops
+    ship as a new strategy version once Phase 8 replay shows they
+    improve anything. Wiring the mechanism early keeps that a config
+    change rather than a code change under time pressure.
+    """
+
+    position = find_position(position_ticket)
+
+    if position is None:
+        return {
+            "status": "FAILED",
+            "position_ticket": position_ticket,
+            "reason": "Position is not open in MT5",
+        }
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": position.symbol,
+        "position": position_ticket,
+        "sl": float(stop_loss if stop_loss is not None else position.sl),
+        "tp": float(take_profit if take_profit is not None else position.tp),
+        "magic": config.MAGIC_NUMBER,
+    }
+
+    try:
+        result = mt5.order_send(request)
+    except Exception as error:                      # noqa: BLE001
+        return {
+            "status": "FAILED",
+            "position_ticket": position_ticket,
+            "reason": f"order_send raised: {error}",
+        }
+
+    if result is None:
+        return {
+            "status": "FAILED",
+            "position_ticket": position_ticket,
+            "reason": f"order_send returned None | {mt5.last_error()}",
+        }
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return {
+            "status": "REJECTED",
+            "position_ticket": position_ticket,
+            "mt5_retcode": result.retcode,
+            "reason": (
+                f"MT5 REJECTED SLTP | retcode={result.retcode} | "
+                f"comment={result.comment}"
+            ),
+        }
+
+    return {
+        "status": "MODIFIED",
+        "position_ticket": position_ticket,
+        "stop_loss": request["sl"],
+        "take_profit": request["tp"],
+        "mt5_retcode": result.retcode,
+    }
+
+
 def _resolve_position_ticket(result):
     """
     Map the filled deal back to its position id.
@@ -200,7 +448,8 @@ def _resolve_position_ticket(result):
     return getattr(result, "order", None)
 
 
-def execute_trade(symbol, signal, client_order_id=None, volume=None):
+def execute_trade(symbol, signal, client_order_id=None, volume=None,
+                  stop_loss=None, take_profit=None):
     """
     Execute a market trade through MetaTrader 5.
 
@@ -213,6 +462,13 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
 
     Never raises for a trading outcome - a rejection is data, not an
     exception.
+
+    Phase 5: `volume` and `stop_loss` / `take_profit` are supplied by
+    the engine's sizing and versioned stop model. They are used as
+    given (only rounded to the broker's digits). When absent - a call
+    that predates sizing, or a broker specification that was missing -
+    the module falls back to `config.LOT_SIZE` and the fixed-percent
+    stop, so the old behaviour still holds.
     """
 
     signal = signal.upper()
@@ -280,16 +536,16 @@ def execute_trade(symbol, signal, client_order_id=None, volume=None):
         order_type = mt5.ORDER_TYPE_BUY
         price = tick.ask
 
-        sl = price * (1 - SL_PERCENT)
-        tp = price * (1 + TP_PERCENT)
+        sl = stop_loss if stop_loss is not None else price * (1 - SL_PERCENT)
+        tp = take_profit if take_profit is not None else price * (1 + TP_PERCENT)
 
     else:
 
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
 
-        sl = price * (1 + SL_PERCENT)
-        tp = price * (1 - TP_PERCENT)
+        sl = stop_loss if stop_loss is not None else price * (1 + SL_PERCENT)
+        tp = take_profit if take_profit is not None else price * (1 - TP_PERCENT)
 
     # ---------------------------------------------------------
     # CRITICAL: use broker's digits
