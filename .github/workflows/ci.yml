@@ -25,7 +25,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.12 is the real floor: requirements.txt pins numpy==2.5.3,
+        # which declares Requires-Python >=3.12 and ships no cp311
+        # wheel. The matrix claimed 3.11 from Phase 1 onward, so that
+        # leg failed at `pip install` on every run from Phase 1 to
+        # Phase 5 - the suite never ran there, and "CI green" was never
+        # actually true. Test the versions the pinned stack supports.
+        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
