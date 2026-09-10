@@ -1,7 +1,9 @@
-python-dotenv==1.2.3
 fastapi
 uvicorn[standard]
+pydantic
+jinja2
+python-dotenv
 MetaTrader5
 pandas
+pandas_ta
 requests
-Jinja2

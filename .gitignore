@@ -5,9 +5,25 @@ __pycache__/
 *.log
 .env.*
 
+# ...but the template MUST be tracked. `.env.*` above would otherwise
+# swallow it, and a config template nobody can clone is not a template.
+!.env.example
+
 # Ruflo local secrets and runtime data
 .env.local
 .env.*.local
 .claude-flow/data/
 .claude-flow/logs/
 .claude-flow/sessions/
+
+# macOS
+.DS_Store
+
+# Local runtime state written by the bot
+memory.json
+new_rules.json
+server.log
+
+# Ruflo/claude-flow machine-local state (binary)
+.swarm/
+ruvector.db

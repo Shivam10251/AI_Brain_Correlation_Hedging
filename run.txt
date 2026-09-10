@@ -1,1 +1,15 @@
-uvicorn main:app --host 0.0.0.0 --port 8000
+# Foreground, to watch the logs while you work:
+uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Or run the module directly (same thing, binds 0.0.0.0):
+python main.py
+
+# Windows, detached, survives closing the terminal and logging out:
+start_background.bat        # double-click, or run from cmd
+stop_background.bat         # stops it; open positions are left untouched
+
+# Dashboard: http://127.0.0.1:8000
+#
+# Bind 127.0.0.1 unless you genuinely need the dashboard reachable from
+# another machine. /api/control has no authentication: anything that can
+# reach the port can start the engine and set the risk percentage.

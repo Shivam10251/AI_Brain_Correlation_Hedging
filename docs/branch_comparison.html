@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Branch Comparison</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+
+  :root{
+    --ink:#12181f; --muted:#5b6b7c; --line:#d7dee6; --soft:#f4f7fa;
+    --a:#1f6feb; --b:#8250df; --warn:#9a3412; --good:#0f7b4f;
+  }
+  *{box-sizing:border-box}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    color:var(--ink); font-size:10.5pt; line-height:1.55; margin:0;
+  }
+  h1{font-size:23pt;margin:0 0 2pt;letter-spacing:-.5pt}
+  .sub{color:var(--muted);font-size:10pt;margin-bottom:3pt}
+  .meta{color:var(--muted);font-size:8.5pt;font-family:ui-monospace,Menlo,monospace;
+        border-bottom:2px solid var(--ink);padding-bottom:10pt;margin-bottom:16pt}
+  h2{font-size:13.5pt;margin:20pt 0 7pt;padding-bottom:3pt;
+     border-bottom:1px solid var(--line);letter-spacing:-.2pt}
+  h3{font-size:11pt;margin:13pt 0 4pt}
+  p{margin:0 0 7pt}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:9pt;
+       background:var(--soft);padding:1px 4px;border-radius:3px}
+
+  table{width:100%;border-collapse:collapse;margin:8pt 0 10pt;font-size:9pt}
+  th{text-align:left;background:var(--soft);padding:6pt 7pt;border:1px solid var(--line);
+     font-size:8pt;text-transform:uppercase;letter-spacing:.4pt;color:var(--muted)}
+  td{padding:5.5pt 7pt;border:1px solid var(--line);vertical-align:top}
+  td.mono{font-family:ui-monospace,Menlo,monospace;font-size:8.5pt}
+
+  .two{display:flex;gap:11pt;margin:10pt 0}
+  .col{flex:1;border:1px solid var(--line);border-radius:5pt;padding:10pt 12pt}
+  .col.a{border-top:3px solid var(--a)}
+  .col.b{border-top:3px solid var(--b)}
+  .col h4{margin:0 0 2pt;font-size:10.5pt}
+  .col .tag{font-family:ui-monospace,Menlo,monospace;font-size:8pt;color:var(--muted);
+            display:block;margin-bottom:7pt}
+  .col ul{margin:0;padding-left:14pt}
+  .col li{margin-bottom:3.5pt;font-size:9.5pt}
+
+  .callout{background:var(--soft);border-left:3px solid var(--warn);
+           padding:9pt 12pt;margin:10pt 0;font-size:9.5pt;border-radius:0 4pt 4pt 0}
+  .callout b{color:var(--warn)}
+  .good{border-left-color:var(--good)}
+  .good b{color:var(--good)}
+
+  ul.tight{margin:4pt 0 8pt;padding-left:16pt}
+  ul.tight li{margin-bottom:3pt}
+
+  .pipe{font-family:ui-monospace,Menlo,monospace;font-size:8.5pt;background:var(--soft);
+        border:1px solid var(--line);border-radius:4pt;padding:9pt 11pt;
+        white-space:pre;line-height:1.45;margin:8pt 0}
+  .pagebreak{page-break-before:always}
+  footer{margin-top:18pt;padding-top:7pt;border-top:1px solid var(--line);
+         color:var(--muted);font-size:8pt}
+</style>
+</head>
+<body>
+
+<h1>Two Architectures, One Trading System</h1>
+<div class="sub"><code>original</code> vs <code>phase-5-sizing-exits</code> — what each branch does, and why they differ</div>
+<div class="meta">Repository: AI_Brain_Correlation_Hedging &nbsp;·&nbsp; Generated 2026-09-10 &nbsp;·&nbsp; MetaTrader 5 only</div>
+
+<h2>The short version</h2>
+
+<p>This repository contains two complete and genuinely different answers to the same
+question: <i>how do you let a language model trade an account without it eventually
+destroying that account?</i></p>
+
+<p>The <code>original</code> branch answers it by <b>learning from its own losses</b>. The
+<code>phase-5-sizing-exits</code> branch answers it by <b>refusing to trust the model at
+all</b>, and putting a deterministic risk engine between the model and the broker.
+Neither is wrong. They are optimised for different things, and the table below is the
+honest summary of what each buys you.</p>
+
+<div class="two">
+  <div class="col a">
+    <h4>original</h4>
+    <span class="tag">7 modules · ~2,400 lines · 0 tests</span>
+    <ul>
+      <li><b>Self-learning.</b> An LLM auditor reads the losing trades and writes rules that penalise those setups next time.</li>
+      <li><b>Flat-file state</b> — <code>memory.json</code>, <code>new_rules.json</code>.</li>
+      <li><b>9 symbols</b>, 1.0% risk per trade.</li>
+      <li>Sizing from stop distance and tick value.</li>
+      <li>Duplicate and hedge guards in the loop.</li>
+      <li>Runs 24/7 detached via WMI on Windows.</li>
+      <li>One dashboard, including a Self-Learning Desk.</li>
+    </ul>
+  </div>
+  <div class="col b">
+    <h4>phase-5-sizing-exits</h4>
+    <span class="tag">38 modules · ~16,700 lines · 255 tests</span>
+    <ul>
+      <li><b>Deterministic risk engine</b> with 14 ordered checks holding sole authority over every order.</li>
+      <li><b>SQLite</b>, 13 tables, reconciled against MT5 in 4 passes.</li>
+      <li><b>4 symbols</b>, 0.25% risk, prop-firm rule profiles in YAML.</li>
+      <li>Versioned strategies — every decision is reproducible.</li>
+      <li>Crash-safe idempotent execution via comment tags.</li>
+      <li>CI on Python 3.12 and 3.13.</li>
+      <li>Built to answer one question: does the AI score predict anything?</li>
+    </ul>
+  </div>
+</div>
+
+<h2>What the <code>original</code> branch does</h2>
+
+<p>Every 30 seconds it walks nine symbols. For each one it pulls 250 H1 and 250 Daily
+bars, computes EMA(200), RSI(14), ATR(14) and relative volume on both frames, and asks
+DeepSeek for a decision. What makes it interesting is what happens next.</p>
+
+<div class="pipe">scan ─→ indicators ─→ [ LLM + learned rules ] ─→ guards ─→ order
+                            ▲                                    │
+                            │                                    ▼
+                       new_rules.json  ←── LLM auditor ←── memory.json
+                                            (reads losses)   (records fills)</div>
+
+<p>Every fill is written to <code>memory.json</code> with the full market context that
+existed at entry — not just the price, but ATR, relative volume, RSI and what all eight
+other instruments were quoting. After each scan the bot asks MT5 which positions have
+closed and stamps the realised P/L onto those records.</p>
+
+<p>Once ten trades have closed, the auditor takes over. It hands the <i>losing</i> trades
+to DeepSeek acting as a Chief Risk Officer and asks a single narrow question: what do
+these have in common? What comes back is a set of rules — a symbol, a setup, a penalty —
+that are injected into every subsequent prompt as mandatory confidence deductions. A
+setup that lost four times arrives at the model pre-penalised and has to clear a higher
+bar than it did the first time.</p>
+
+<h3>The three guardrails that matter</h3>
+
+<table>
+  <tr><th style="width:27%">Guardrail</th><th>What it prevents</th></tr>
+  <tr><td><b>Penalty clamp 15–30</b></td><td>An unclamped model will happily propose a 90-point penalty, silently disabling a symbol forever on a sample of four trades.</td></tr>
+  <tr><td><b>Minimum 2 samples</b></td><td>One losing trade is an anecdote. Rules built on a single loss are superstition with a JSON schema.</td></tr>
+  <tr><td><b>Merge, never stack</b></td><td>Re-confirming a rule updates it in place. Without this, three audits agreeing would compound into a 60-point penalty.</td></tr>
+</table>
+
+<div class="callout good">
+  <b>The genuinely good idea here</b> is storing the full market context with each fill.
+  Knowing a trade lost tells you nothing you can act on. Knowing it lost on 0.4× relative
+  volume, for the fifth time, is a rule. Most retail bots record only price and outcome
+  and can therefore never learn anything structural.
+</div>
+
+<div class="pagebreak"></div>
+
+<h2>What the <code>phase-5-sizing-exits</code> branch does</h2>
+
+<p>The same core loop, rebuilt over five gated phases on the premise that <b>the model is
+an untrusted input</b>. The architecture is three layers that do not trust each other:</p>
+
+<div class="pipe">LLM opinion ─→ [ RISK ENGINE: 14 ordered checks ] ─→ order ─→ MT5
+                        │                                              │
+                        └── refusal is DATA, logged with a reason      ▼
+                                                              reconciler (4 passes)
+                                                          MT5 is the source of truth</div>
+
+<table>
+  <tr><th style="width:24%">Layer</th><th>Guarantee it provides</th></tr>
+  <tr><td><b>AI brain</b></td><td><code>get_ai_decision()</code> is contractually incapable of raising. Every failure returns a safe HOLD, so a malformed response can never reach execution.</td></tr>
+  <tr><td><b>Risk engine</b></td><td>Fourteen ordered checks — kill switch, score floor, spread, hedging ban, position cap, per-trade risk, daily loss, loss streak, account floor, net exposure. First failure wins and every check is logged, including the ones never reached.</td></tr>
+  <tr><td><b>Sizing &amp; stops</b></td><td>Volume floored to the broker's step so realised risk is always at or below target. A minimum lot that exceeds the budget is refused, never silently traded.</td></tr>
+  <tr><td><b>Execution</b></td><td>Intent written to SQLite <i>before</i> the order is sent. A crash mid-flight is resolved by asking MT5, never by re-sending.</td></tr>
+  <tr><td><b>Reconciler</b></td><td>Four passes. MT5 is truth; the database mirrors it and is corrected, never the reverse.</td></tr>
+  <tr><td><b>Versioning</b></td><td>Every decision references a strategy version derived from the prompt hash. Editing the prompt registers a new version rather than polluting the old one's trade population.</td></tr>
+</table>
+
+<h2>Side by side</h2>
+
+<table>
+  <tr><th style="width:22%">Dimension</th><th style="width:39%">original</th><th style="width:39%">phase-5-sizing-exits</th></tr>
+  <tr><td><b>Persistence</b></td><td class="mono">memory.json, new_rules.json</td><td class="mono">SQLite, 13 tables, WAL</td></tr>
+  <tr><td><b>Risk authority</b></td><td>Confidence threshold + 2 loop guards</td><td>14-check engine with sole authority</td></tr>
+  <tr><td><b>Risk per trade</b></td><td>1.0% of equity</td><td>0.25% (demo) / 0.5% (prop), profile-driven</td></tr>
+  <tr><td><b>Universe</b></td><td>9 symbols</td><td>4 symbols</td></tr>
+  <tr><td><b>Adaptation</b></td><td>LLM auditor rewrites rules autonomously</td><td>None. Strategy is frozen and versioned</td></tr>
+  <tr><td><b>Daily loss limit</b></td><td>None</td><td>3% with 0.5% buffer, ledger reconciled to MT5</td></tr>
+  <tr><td><b>Account floor</b></td><td>None</td><td>$90,000 + $500 buffer</td></tr>
+  <tr><td><b>Crash safety</b></td><td>Re-reads memory.json on boot</td><td>Idempotent comment tags; ambiguity resolved from deal history</td></tr>
+  <tr><td><b>Exits</b></td><td>SL/TP + reversal close</td><td>SL, TP, REVERSAL, FLATTEN, KILL, MANUAL — all labelled</td></tr>
+  <tr><td><b>Broker facts</b></td><td>Read live per order</td><td>Measured at startup into profile tables; never assumed</td></tr>
+  <tr><td><b>Tests</b></td><td>None</td><td>255, against a fake MT5 shim</td></tr>
+  <tr><td><b>24/7 operation</b></td><td>WMI detached process, survives logout</td><td><code>start_bot.bat</code>, foreground</td></tr>
+</table>
+
+<h2>The one real conflict</h2>
+
+<div class="callout">
+  <b>The self-learning auditor and the Phase 6 calibration gate cannot coexist.</b>
+  Phase 6 asks whether a confidence score of 80 actually wins more often than a score of
+  60, and needs ≥200 closed trades under a <i>frozen</i> strategy to answer it. The
+  auditor changes what the score means every time it runs — a score of 80 in week one and
+  a score of 80 in week four have been produced by different rule sets. You cannot
+  calibrate a measure that moves while you are measuring it.
+</div>
+
+<p>This is not an argument against the auditor. It is an argument about <i>ordering</i>.
+The defensible sequence is: freeze the strategy, run Phase 6, find out whether the signal
+predicts anything at all — and only then turn on a mechanism that adapts it. Adaptive
+machinery layered on top of an edge that was never demonstrated adapts noise.</p>
+
+<h3>If both are wanted eventually</h3>
+<ul class="tight">
+  <li>Store rules in SQLite with a version id, not in a flat JSON file.</li>
+  <li>Treat every audit as registering a <b>new strategy version</b>, so trade populations never mix — this is invariant 9 on the phase-5 branch.</li>
+  <li>Keep the 15–30 clamp and the 2-sample minimum. They are the only things standing between the model and a self-inflicted permanent ban on a symbol.</li>
+  <li>Run the auditor only after Phase 6 has returned a verdict.</li>
+</ul>
+
+<h2>Which branch to run</h2>
+
+<table>
+  <tr><th style="width:50%">If your goal is…</th><th>Run</th></tr>
+  <tr><td>Get something autonomous trading a demo account this week, across a wide universe, that visibly improves itself</td><td><code>original</code></td></tr>
+  <tr><td>Find out whether the AI signal has any predictive value before risking real money</td><td><code>phase-5-sizing-exits</code></td></tr>
+  <tr><td>Pass a prop-firm evaluation with hard daily-loss and floor rules</td><td><code>phase-5-sizing-exits</code></td></tr>
+  <tr><td>Explore whether loss-pattern learning works at all</td><td><code>original</code></td></tr>
+</table>
+
+<div class="callout">
+  <b>Neither branch has traded a live account.</b> Everything on <code>phase-5-sizing-exits</code>
+  was verified against a fake MT5 shim; everything on <code>original</code> has been
+  syntax- and logic-checked but never connected to a broker, because MetaTrader5 is
+  Windows-only and this work was done on macOS. Both need a demo terminal before they
+  need anything else.
+</div>
+
+<footer>
+  AI_Brain_Correlation_Hedging · branch comparison · generated 2026-09-10 ·
+  <code>original</code> @ working tree · <code>phase-5-sizing-exits</code> @ 4856d47
+</footer>
+
+</body>
+</html>

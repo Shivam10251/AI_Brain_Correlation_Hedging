@@ -1,1138 +1,544 @@
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Hedge Fund — Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#090d14; --panel:#0f1520; --panel-2:#141c29; --line:#1e2937;
+    --text:#e6edf6; --muted:#7d8fa6; --dim:#4d5f75;
+    --buy:#00d68f; --sell:#ff4d6a; --hold:#5b7089;
+    --accent:#3d8bfd; --warn:#ffb020;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:Inter,system-ui,-apple-system,sans-serif;
+    font-size:14px; line-height:1.5;
+  }
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
-    <title>AI Hedge Fund Engine</title>
+  /* ---- top bar ---- */
+  .topbar{
+    display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+    padding:14px 22px;background:var(--panel);
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;
+  }
+  .brand{font-weight:700;font-size:16px;letter-spacing:-.2px;margin-right:auto}
+  .brand span{color:var(--accent)}
+  .ctl{display:flex;align-items:center;gap:8px}
+  .ctl label{color:var(--muted);font-size:12px;font-weight:500;white-space:nowrap}
+  select,input[type=number]{
+    background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+    border-radius:7px;padding:7px 10px;font-family:var(--mono);font-size:13px;
+  }
+  input[type=number]{width:74px}
+  select:focus,input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  button{
+    background:var(--panel-2);color:var(--text);border:1px solid var(--line);
+    border-radius:7px;padding:8px 14px;font-family:inherit;font-size:13px;
+    font-weight:600;cursor:pointer;transition:.15s;
+  }
+  button:hover{border-color:var(--dim)}
+  .btn-start{background:var(--buy);color:#04120c;border-color:transparent}
+  .btn-stop{background:var(--sell);color:#fff;border-color:transparent}
+  .btn-ghost{background:transparent}
 
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+  /* ---- layout ---- */
+  .wrap{padding:20px 22px;max-width:1680px;margin:0 auto}
+  .grid{display:grid;gap:16px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:16px}
+  .cols{grid-template-columns:1.35fr 1fr;align-items:start}
+  @media(max-width:1080px){.cols{grid-template-columns:1fr}}
 
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        graphite: "#0B120E",
-                        lime: "#75E063"
-                    }
-                }
-            }
-        }
-    </script>
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  .panel h2{
+    margin:0;padding:13px 18px;font-size:12px;font-weight:600;
+    text-transform:uppercase;letter-spacing:.9px;color:var(--muted);
+    border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;
+  }
+  .panel h2 .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .body{padding:16px 18px}
 
-    <style>
-        :root {
-            --graphite: #0B120E;
-            --lime: #75E063;
-        }
+  /* ---- metric cards ---- */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+  .card .k{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);font-weight:600}
+  .card .v{font-family:var(--mono);font-size:26px;font-weight:500;margin-top:7px;letter-spacing:-.5px}
+  .card .s{font-size:11px;color:var(--dim);margin-top:3px}
 
-        * {
-            box-sizing: border-box;
-        }
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:8px;vertical-align:middle}
+  .dot.on{background:var(--buy);box-shadow:0 0 0 0 rgba(0,214,143,.65);animation:pulse 2s infinite}
+  .dot.off{background:var(--dim)}
+  @keyframes pulse{
+    70%{box-shadow:0 0 0 11px rgba(0,214,143,0)}
+    100%{box-shadow:0 0 0 0 rgba(0,214,143,0)}
+  }
 
-        body {
-            margin: 0;
-            background: var(--graphite);
-            color: #e5e7eb;
-            font-family:
-                Inter,
-                ui-sans-serif,
-                system-ui,
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                sans-serif;
-            overflow: hidden;
-        }
+  /* ---- signal ---- */
+  .badge{
+    display:inline-block;padding:6px 16px;border-radius:7px;font-weight:700;
+    font-size:15px;letter-spacing:.6px;
+  }
+  .badge.BUY{background:rgba(0,214,143,.14);color:var(--buy);border:1px solid rgba(0,214,143,.35)}
+  .badge.SELL{background:rgba(255,77,106,.14);color:var(--sell);border:1px solid rgba(255,77,106,.35)}
+  .badge.HOLD{background:rgba(91,112,137,.16);color:var(--hold);border:1px solid rgba(91,112,137,.3)}
 
-        /* =========================================================
-           CANVAS
-        ========================================================= */
+  .rationale{
+    margin-top:13px;padding:13px 15px;background:var(--panel-2);
+    border-left:3px solid var(--accent);border-radius:0 8px 8px 0;
+    color:#c3d1e2;font-size:13px;line-height:1.65;
+  }
+  .tags{display:flex;gap:9px;flex-wrap:wrap;margin-top:13px}
+  .tag{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:7px;
+    padding:7px 12px;font-size:11px;
+  }
+  .tag b{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;
+    letter-spacing:.7px;font-weight:600;margin-bottom:3px}
+  .tag span{font-family:var(--mono);font-size:13px}
 
-        #networkCanvas {
-            position: fixed;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 0;
-        }
+  /* ---- tables ---- */
+  .scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{
+    text-align:left;padding:9px 12px;color:var(--muted);font-weight:600;
+    font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;
+    border-bottom:1px solid var(--line);white-space:nowrap;
+  }
+  td{padding:10px 12px;border-bottom:1px solid rgba(30,41,55,.5);white-space:nowrap}
+  tbody tr:hover{background:rgba(61,139,253,.05)}
+  td.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .side-BUY{color:var(--buy);font-weight:600}
+  .side-SELL{color:var(--sell);font-weight:600}
+  .pos{color:var(--buy)} .neg{color:var(--sell)}
+  .empty{padding:34px;text-align:center;color:var(--dim);font-size:13px}
+  .wrapcell{white-space:normal;min-width:230px;color:#b3c2d4;line-height:1.55}
 
-        /* =========================================================
-           GLASS UI
-        ========================================================= */
+  .pill{
+    display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;
+    font-weight:600;letter-spacing:.4px;
+  }
+  .pill.ACTIVE{background:rgba(0,214,143,.14);color:var(--buy)}
+  .pill.CONFIRMED{background:rgba(61,139,253,.14);color:var(--accent)}
+  .penalty{color:var(--warn);font-family:var(--mono);font-weight:600}
 
-        .glass {
-            background: rgba(11, 18, 14, 0.82);
-            backdrop-filter: blur(18px);
-            -webkit-backdrop-filter: blur(18px);
-            border: 1px solid rgba(117, 224, 99, 0.13);
-            box-shadow:
-                0 20px 60px rgba(0, 0, 0, 0.35),
-                inset 0 1px 0 rgba(255, 255, 255, 0.025);
-        }
+  .guard{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(30,41,55,.5);font-size:13px}
+  .guard:last-child{border-bottom:none}
+  .guard span:first-child{color:var(--muted)}
+  .guard span:last-child{font-family:var(--mono)}
 
-        .lime-glow {
-            box-shadow:
-                0 0 20px rgba(117, 224, 99, 0.16),
-                inset 0 0 20px rgba(117, 224, 99, 0.025);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 999px;
-            background: #52525b;
-            transition: all 0.3s ease;
-        }
-
-        .status-dot.running {
-            background: var(--lime);
-            box-shadow:
-                0 0 8px var(--lime),
-                0 0 18px rgba(117, 224, 99, 0.65);
-        }
-
-        .feed-scroll::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .feed-scroll::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .feed-scroll::-webkit-scrollbar-thumb {
-            background: rgba(117, 224, 99, 0.2);
-            border-radius: 999px;
-        }
-
-        .pulse {
-            animation: pulse 1.8s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.45;
-            }
-        }
-
-        .trade-entry {
-            animation: feedIn 0.35s ease-out;
-        }
-
-        @keyframes feedIn {
-            from {
-                opacity: 0;
-                transform: translateY(8px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-    </style>
+  canvas{width:100%;height:190px;display:block;border-radius:0 0 12px 12px}
+  .toast{
+    position:fixed;bottom:22px;right:22px;background:var(--panel-2);
+    border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:9px;padding:13px 17px;font-size:13px;max-width:400px;
+    opacity:0;transform:translateY(9px);transition:.25s;pointer-events:none;z-index:50;
+  }
+  .toast.show{opacity:1;transform:translateY(0)}
+</style>
 </head>
-
 <body>
 
-<!-- =============================================================
-     CANVAS BACKGROUND
-============================================================= -->
+<div class="topbar">
+  <div class="brand">AI HEDGE <span>FUND</span></div>
 
-<canvas id="networkCanvas"></canvas>
+  <div class="ctl">
+    <label for="interval">Scan</label>
+    <select id="interval">
+      <option value="30">30s</option>
+      <option value="60">1m</option>
+      <option value="300">5m</option>
+      <option value="3600">1h</option>
+    </select>
+  </div>
 
+  <div class="ctl">
+    <label for="risk">Risk %</label>
+    <input type="number" id="risk" min="0.1" max="100" step="0.1" value="1.0">
+  </div>
 
-<!-- =============================================================
-     APPLICATION
-============================================================= -->
+  <button id="engineBtn" class="btn-start" onclick="toggleEngine()">Start Engine</button>
+</div>
 
-<div class="relative z-10 min-h-screen w-full">
+<div class="wrap">
 
-    <!-- =========================================================
-         HEADER
-    ========================================================== -->
+  <!-- metric cards -->
+  <div class="grid cards">
+    <div class="card">
+      <div class="k">Account Equity</div>
+      <div class="v num" id="equity">—</div>
+      <div class="s" id="equitySub">live from MT5</div>
+    </div>
+    <div class="card">
+      <div class="k">Engine</div>
+      <div class="v" id="engineState"><span class="dot off"></span>—</div>
+      <div class="s" id="engineSub">scanning paused</div>
+    </div>
+    <div class="card">
+      <div class="k">AI Confidence</div>
+      <div class="v num" id="confidence">—</div>
+      <div class="s" id="confSub">last decision</div>
+    </div>
+    <div class="card">
+      <div class="k">Confirmed Fills</div>
+      <div class="v num" id="fills">0</div>
+      <div class="s" id="fillsSub">this session</div>
+    </div>
+  </div>
 
-    <header class="flex items-center justify-between px-6 py-5 lg:px-8">
+  <div class="grid cols">
 
-        <!-- Brand -->
-        <div class="flex items-center gap-4">
+    <!-- LEFT -->
+    <div class="grid" style="gap:16px">
 
-            <div
-                class="flex h-10 w-10 items-center justify-center rounded-xl border border-lime/20 bg-lime/5 lime-glow"
-            >
-                <div class="h-3 w-3 rounded-full bg-lime shadow-[0_0_14px_#75E063]"></div>
-            </div>
-
-            <div>
-                <div class="text-sm font-semibold tracking-[0.22em] text-lime">
-                    AI HEDGE FUND
-                </div>
-
-                <div class="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-                    Autonomous Quant Engine
-                </div>
-            </div>
-
+      <div class="panel">
+        <h2>Decision Intelligence</h2>
+        <div class="body">
+          <span class="badge HOLD" id="signalBadge">HOLD</span>
+          <div class="rationale" id="rationale">Waiting for the first decision…</div>
+          <div class="tags">
+            <div class="tag"><b>Entry ref</b><span id="tEntry">—</span></div>
+            <div class="tag"><b>ATR stop loss</b><span id="tSL">—</span></div>
+            <div class="tag"><b>ATR take profit</b><span id="tTP">—</span></div>
+          </div>
         </div>
+      </div>
 
-
-        <!-- Controls -->
-        <div class="glass flex items-center gap-3 rounded-2xl p-2">
-
-            <!-- Engine status -->
-            <div class="hidden items-center gap-2 px-3 sm:flex">
-                <div id="statusDot" class="status-dot"></div>
-
-                <span
-                    id="engineStatus"
-                    class="text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500"
-                >
-                    Offline
-                </span>
-            </div>
-
-
-            <!-- Interval -->
-            <select
-                id="intervalSelect"
-                class="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-zinc-300 outline-none transition hover:border-lime/20 focus:border-lime/30"
-            >
-                <option value="30">30s</option>
-                <option value="3600">1hr</option>
-            </select>
-
-
-            <!-- Start / Stop -->
-            <button
-                id="engineButton"
-                onclick="toggleEngine()"
-                class="rounded-xl border border-lime/20 bg-lime/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-lime transition hover:bg-lime/15 hover:shadow-[0_0_20px_rgba(117,224,99,0.15)]"
-            >
-                Initialize Engine
-            </button>
-
+      <div class="panel">
+        <h2>Portfolio Exposure</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr>
+              <th>Ticket</th><th>Symbol</th><th>Side</th><th>Volume</th>
+              <th>Entry</th><th>Current</th><th>SL</th><th>TP</th>
+              <th>Floating P/L</th><th></th>
+            </tr></thead>
+            <tbody id="positions"></tbody>
+          </table>
         </div>
+        <div class="empty" id="positionsEmpty">No open exposure.</div>
+      </div>
 
-    </header>
-
-
-    <!-- =========================================================
-         RIGHT SIDE PANEL
-    ========================================================== -->
-
-    <aside
-        class="glass absolute right-5 top-24 flex h-[calc(100vh-7rem)] w-[390px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-3xl lg:right-8"
-    >
-
-        <!-- Panel Header -->
-        <div class="border-b border-white/5 px-6 py-5">
-
-            <div class="flex items-center justify-between">
-
-                <div>
-                    <div class="text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-                        Engine Telemetry
-                    </div>
-
-                    <div class="mt-1 text-sm font-medium text-zinc-200">
-                        Live Intelligence
-                    </div>
-                </div>
-
-                <div
-                    id="connectionStatus"
-                    class="rounded-full border border-zinc-700/50 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-zinc-500"
-                >
-                    Connecting
-                </div>
-
-            </div>
-
+      <div class="panel">
+        <h2>Self-Learning Desk
+          <span class="right">
+            <span class="num" id="ruleCount" style="color:var(--warn)">0 active</span>
+            <button class="btn-ghost" onclick="runAudit()">Run Audit Now</button>
+          </span>
+        </h2>
+        <div class="scroll">
+          <table>
+            <thead><tr>
+              <th>Symbol</th><th>Discovered pattern</th><th>Penalty</th>
+              <th>Sample</th><th>Auditor evidence</th><th>Status</th>
+            </tr></thead>
+            <tbody id="rules"></tbody>
+          </table>
         </div>
-
-
-        <!-- =====================================================
-             EQUITY
-        ====================================================== -->
-
-        <div class="border-b border-white/5 px-6 py-6">
-
-            <div class="text-[10px] uppercase tracking-[0.22em] text-zinc-500">
-                Live Equity
-            </div>
-
-            <div class="mt-2 flex items-end gap-2">
-
-                <span
-                    id="equity"
-                    class="text-4xl font-semibold tracking-tight text-zinc-100"
-                >
-                    $0.00
-                </span>
-
-            </div>
-
-            <div class="mt-2 flex items-center gap-2">
-
-                <div id="equityDot" class="h-1.5 w-1.5 rounded-full bg-zinc-600"></div>
-
-                <span class="text-[10px] uppercase tracking-widest text-zinc-500">
-                    MT5 Account
-                </span>
-
-            </div>
-
+        <div class="empty" id="rulesEmpty">
+          No rules learned yet. The auditor writes one when it finds a
+          losing pattern across at least two closed trades.
         </div>
+      </div>
 
+    </div>
 
-        <!-- =====================================================
-             AI LOGIC
-        ====================================================== -->
+    <!-- RIGHT -->
+    <div class="grid" style="gap:16px">
 
-        <div class="border-b border-white/5 px-6 py-6">
-
-            <div class="flex items-center justify-between">
-
-                <div class="text-[10px] uppercase tracking-[0.22em] text-zinc-500">
-                    AI Logic
-                </div>
-
-                <div
-                    id="confidence"
-                    class="text-sm font-semibold text-lime"
-                >
-                    0%
-                </div>
-
-            </div>
-
-            <div
-                id="logic"
-                class="mt-3 min-h-[72px] text-sm leading-6 text-zinc-300"
-            >
-                Waiting for market intelligence...
-            </div>
-
-            <!-- Confidence bar -->
-            <div class="mt-4 h-1 overflow-hidden rounded-full bg-white/5">
-
-                <div
-                    id="confidenceBar"
-                    class="h-full w-0 rounded-full bg-lime transition-all duration-700"
-                    style="box-shadow: 0 0 10px rgba(117,224,99,0.5);"
-                ></div>
-
-            </div>
-
+      <div class="panel">
+        <h2>Risk Framework Guardrails</h2>
+        <div class="body" style="padding-top:6px;padding-bottom:8px">
+          <div class="guard"><span>Risk per trade</span><span id="gRisk">—</span></div>
+          <div class="guard"><span>Confidence floor</span><span id="gConf">—</span></div>
+          <div class="guard"><span>Scan interval</span><span id="gInt">—</span></div>
+          <div class="guard"><span>Duplicate guard</span><span style="color:var(--buy)">ENFORCED</span></div>
+          <div class="guard"><span>Hedge guard</span><span style="color:var(--buy)">CLOSE-FIRST</span></div>
+          <div class="guard"><span>Sizing</span><span>ATR / STOP-BASED</span></div>
+          <div class="guard"><span>Last audit</span><span id="gAudit">never</span></div>
         </div>
+      </div>
 
+      <div class="panel">
+        <h2>Trade Topology</h2>
+        <canvas id="topology"></canvas>
+      </div>
 
-        <!-- =====================================================
-             EXECUTION FEED
-        ====================================================== -->
+    </div>
+  </div>
 
-        <div class="flex min-h-0 flex-1 flex-col">
-
-            <div class="flex items-center justify-between px-6 py-5">
-
-                <div class="text-[10px] uppercase tracking-[0.22em] text-zinc-500">
-                    Live Execution Feed
-                </div>
-
-                <div class="flex items-center gap-2">
-
-                    <div class="h-1.5 w-1.5 rounded-full bg-lime pulse"></div>
-
-                    <span class="text-[9px] uppercase tracking-widest text-zinc-600">
-                        Live
-                    </span>
-
-                </div>
-
-            </div>
-
-
-            <div
-                id="executionFeed"
-                class="feed-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-6"
-            >
-
-                <div
-                    id="emptyFeed"
-                    class="flex h-full min-h-[180px] items-center justify-center text-center"
-                >
-
-                    <div>
-                        <div class="text-xs text-zinc-600">
-                            No executions yet
-                        </div>
-
-                        <div class="mt-1 text-[9px] uppercase tracking-widest text-zinc-700">
-                            Awaiting signal
-                        </div>
-                    </div>
-
-                </div>
-
-            </div>
-
-        </div>
-
-    </aside>
+  <!-- ledger -->
+  <div class="panel" style="margin-top:16px">
+    <h2>Confirmed Fills Ledger</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Local time</th><th>Symbol</th><th>Side</th><th>Fill</th>
+          <th>SL</th><th>TP</th><th>Volume</th><th>Risk %</th>
+          <th>Deal ID</th><th>Status</th>
+        </tr></thead>
+        <tbody id="ledger"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="ledgerEmpty">No fills yet this session.</div>
+  </div>
 
 </div>
 
-
-<!-- =============================================================
-     JAVASCRIPT
-============================================================= -->
+<div class="toast" id="toast"></div>
 
 <script>
-
-    // ============================================================
-    // DOM ELEMENTS
-    // ============================================================
-
-    const equityEl = document.getElementById("equity");
-    const logicEl = document.getElementById("logic");
-    const confidenceEl = document.getElementById("confidence");
-    const confidenceBar = document.getElementById("confidenceBar");
-
-    const executionFeed = document.getElementById("executionFeed");
-    const emptyFeed = document.getElementById("emptyFeed");
-
-    const engineButton = document.getElementById("engineButton");
-    const engineStatus = document.getElementById("engineStatus");
-    const statusDot = document.getElementById("statusDot");
-
-    const intervalSelect = document.getElementById("intervalSelect");
-    const connectionStatus = document.getElementById("connectionStatus");
-
-
-    // ============================================================
-    // LOCAL STATE
-    // ============================================================
-
-    let knownTrades = new Set();
-
-    let networkNodes = [];
-
-    let canvas;
-    let ctx;
-
-    let animationFrame;
-
-
-    // ============================================================
-    // ASSET COLORS
-    // ============================================================
-
-    const assetColors = {
-        EURUSDm: "#75E063",
-        GBPUSDm: "#60A5FA",
-        BTCUSDm: "#F59E0B",
-        XAUUSDm: "#FBBF24",
-        USDJPYm: "#F472B6",
-        AUDUSDm: "#A78BFA",
-        USDCADm: "#34D399",
-        NZDUSDm: "#FB7185"
-    };
-
-
-    function getAssetColor(asset) {
-
-        if (assetColors[asset]) {
-            return assetColors[asset];
-        }
-
-        // Generate a deterministic color for unknown assets
-        let hash = 0;
-
-        for (let i = 0; i < asset.length; i++) {
-            hash = asset.charCodeAt(i) + ((hash << 5) - hash);
-        }
-
-        const hue = Math.abs(hash) % 360;
-
-        return `hsl(${hue}, 70%, 65%)`;
-    }
-
-
-    // ============================================================
-    // CANVAS INITIALIZATION
-    // ============================================================
-
-    function initializeCanvas() {
-
-        canvas = document.getElementById("networkCanvas");
-        ctx = canvas.getContext("2d");
-
-        resizeCanvas();
-
-        window.addEventListener(
-            "resize",
-            resizeCanvas
-        );
-
-        animateNetwork();
-    }
-
-
-    function resizeCanvas() {
-
-        const dpr = window.devicePixelRatio || 1;
-
-        canvas.width = window.innerWidth * dpr;
-        canvas.height = window.innerHeight * dpr;
-
-        canvas.style.width = `${window.innerWidth}px`;
-        canvas.style.height = `${window.innerHeight}px`;
-
-        ctx.setTransform(
-            dpr,
-            0,
-            0,
-            dpr,
-            0,
-            0
-        );
-    }
-
-
-    // ============================================================
-    // SPAWN TRADE NODE
-    // ============================================================
-
-    function spawnTradeCircle(trade) {
-
-        // Keep nodes mostly away from the right-side dashboard
-        const panelWidth = 430;
-
-        const maxX = Math.max(
-            250,
-            window.innerWidth - panelWidth
-        );
-
-        const node = {
-
-            x: 80 + Math.random() * Math.max(100, maxX - 160),
-
-            y: 130 + Math.random() * Math.max(
-                100,
-                window.innerHeight - 220
-            ),
-
-            radius: 4 + Math.random() * 3,
-
-            targetRadius: 4 + Math.random() * 3,
-
-            color: getAssetColor(trade.asset),
-
-            asset: trade.asset,
-
-            signal: trade.signal,
-
-            createdAt: performance.now(),
-
-            life: 0,
-
-            pulse: Math.random() * Math.PI * 2
-
-        };
-
-        networkNodes.push(node);
-
-        // Prevent unlimited canvas growth
-        if (networkNodes.length > 100) {
-            networkNodes.shift();
-        }
-    }
-
-
-    // ============================================================
-    // CANVAS NETWORK ANIMATION
-    // ============================================================
-
-    function animateNetwork() {
-
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-
-        ctx.clearRect(
-            0,
-            0,
-            width,
-            height
-        );
-
-
-        // Very subtle radial background
-        const gradient = ctx.createRadialGradient(
-            width * 0.35,
-            height * 0.45,
-            0,
-            width * 0.35,
-            height * 0.45,
-            Math.max(width, height) * 0.7
-        );
-
-        gradient.addColorStop(
-            0,
-            "rgba(117, 224, 99, 0.025)"
-        );
-
-        gradient.addColorStop(
-            1,
-            "rgba(11, 18, 14, 0)"
-        );
-
-        ctx.fillStyle = gradient;
-
-        ctx.fillRect(
-            0,
-            0,
-            width,
-            height
-        );
-
-
-        // --------------------------------------------------------
-        // Connecting neural-network lines
-        // --------------------------------------------------------
-
-        for (let i = 0; i < networkNodes.length; i++) {
-
-            const a = networkNodes[i];
-
-            for (let j = i + 1; j < networkNodes.length; j++) {
-
-                const b = networkNodes[j];
-
-                const dx = a.x - b.x;
-                const dy = a.y - b.y;
-
-                const distance = Math.sqrt(
-                    dx * dx + dy * dy
-                );
-
-                const maxDistance = 280;
-
-                if (distance < maxDistance) {
-
-                    const opacity =
-                        (1 - distance / maxDistance) * 0.16;
-
-                    ctx.beginPath();
-
-                    ctx.moveTo(
-                        a.x,
-                        a.y
-                    );
-
-                    ctx.lineTo(
-                        b.x,
-                        b.y
-                    );
-
-                    ctx.strokeStyle =
-                        `rgba(117, 224, 99, ${opacity})`;
-
-                    ctx.lineWidth = 0.7;
-
-                    ctx.stroke();
-                }
-            }
-        }
-
-
-        // --------------------------------------------------------
-        // Nodes
-        // --------------------------------------------------------
-
-        networkNodes.forEach(node => {
-
-            node.life += 0.016;
-            node.pulse += 0.045;
-
-            const pulse =
-                Math.sin(node.pulse) * 1.5;
-
-            const radius =
-                node.radius + pulse;
-
-
-            // Glow
-            const glow = ctx.createRadialGradient(
-                node.x,
-                node.y,
-                0,
-                node.x,
-                node.y,
-                radius * 7
-            );
-
-            glow.addColorStop(
-                0,
-                node.color
-            );
-
-            glow.addColorStop(
-                0.2,
-                node.color.replace(")", ", 0.35)")
-            );
-
-            glow.addColorStop(
-                1,
-                "rgba(0,0,0,0)"
-            );
-
-            ctx.beginPath();
-
-            ctx.arc(
-                node.x,
-                node.y,
-                radius * 7,
-                0,
-                Math.PI * 2
-            );
-
-            ctx.fillStyle = glow;
-
-            ctx.fill();
-
-
-            // Core
-            ctx.beginPath();
-
-            ctx.arc(
-                node.x,
-                node.y,
-                Math.max(1.5, radius),
-                0,
-                Math.PI * 2
-            );
-
-            ctx.fillStyle = node.color;
-
-            ctx.shadowColor = node.color;
-            ctx.shadowBlur = 15;
-
-            ctx.fill();
-
-            ctx.shadowBlur = 0;
-
-
-            // Small asset label
-            ctx.font = "9px monospace";
-
-            ctx.fillStyle = "rgba(229,231,235,0.38)";
-
-            ctx.fillText(
-                node.asset,
-                node.x + 10,
-                node.y - 8
-            );
-
-        });
-
-
-        animationFrame = requestAnimationFrame(
-            animateNetwork
-        );
-    }
-
-
-    // ============================================================
-    // ADD TRADE TO EXECUTION FEED
-    // ============================================================
-
-    function addTradeToFeed(trade) {
-
-        if (emptyFeed) {
-            emptyFeed.remove();
-        }
-
-        const entry = document.createElement("div");
-
-        entry.className =
-            "trade-entry mb-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4";
-
-        const color =
-            getAssetColor(trade.asset);
-
-        const signalClass =
-            trade.signal === "BUY"
-                ? "text-lime"
-                : "text-red-400";
-
-        const time =
-            new Date(trade.time).toLocaleTimeString(
-                [],
-                {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit"
-                }
-            );
-
-
-        entry.innerHTML = `
-
-            <div class="flex items-center justify-between">
-
-                <div class="flex items-center gap-2">
-
-                    <div
-                        class="h-2 w-2 rounded-full"
-                        style="
-                            background:${color};
-                            box-shadow:0 0 10px ${color};
-                        "
-                    ></div>
-
-                    <span class="text-xs font-semibold text-zinc-200">
-                        ${escapeHtml(trade.asset)}
-                    </span>
-
-                </div>
-
-                <span class="text-[9px] text-zinc-600">
-                    ${time}
-                </span>
-
-            </div>
-
-
-            <div class="mt-2 flex items-center justify-between">
-
-                <span class="text-[10px] uppercase tracking-[0.18em] ${signalClass}">
-                    ${escapeHtml(trade.signal)}
-                </span>
-
-                <span class="text-[9px] uppercase tracking-widest text-zinc-600">
-                    EXECUTED
-                </span>
-
-            </div>
-
-
-            <div class="mt-2 text-[10px] leading-4 text-zinc-500">
-                ${escapeHtml(trade.logic)}
-            </div>
-
-        `;
-
-        executionFeed.prepend(entry);
-
-        // Spawn visual neural-network node
-        spawnTradeCircle(trade);
-    }
-
-
-    // ============================================================
-    // HTML ESCAPING
-    // ============================================================
-
-    function escapeHtml(value) {
-
-        const div = document.createElement("div");
-
-        div.textContent = value ?? "";
-
-        return div.innerHTML;
-    }
-
-
-    // ============================================================
-    // POLL BACKEND
-    // ============================================================
-
-    async function pollBackend() {
-
-        try {
-
-            const response = await fetch(
-                "/api/status",
-                {
-                    cache: "no-store"
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(
-                    `HTTP ${response.status}`
-                );
-            }
-
-            const state = await response.json();
-
-
-            // ----------------------------------------------------
-            // Connection
-            // ----------------------------------------------------
-
-            connectionStatus.textContent = "Connected";
-
-            connectionStatus.className =
-                "rounded-full border border-lime/20 bg-lime/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-lime";
-
-
-            // ----------------------------------------------------
-            // Equity
-            // ----------------------------------------------------
-
-            const equity =
-                Number(state.equity || 0);
-
-            equityEl.textContent =
-                `$${equity.toLocaleString(
-                    "en-US",
-                    {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    }
-                )}`;
-
-
-            // ----------------------------------------------------
-            // AI Logic
-            // ----------------------------------------------------
-
-            logicEl.textContent =
-                state.last_logic ||
-                "Waiting for market intelligence...";
-
-
-            // ----------------------------------------------------
-            // Confidence
-            // ----------------------------------------------------
-
-            const confidence =
-                Number(state.last_confidence || 0);
-
-            confidenceEl.textContent =
-                `${confidence}%`;
-
-            confidenceBar.style.width =
-                `${Math.min(100, Math.max(0, confidence))}%`;
-
-
-            // ----------------------------------------------------
-            // Engine status
-            // ----------------------------------------------------
-
-            updateEngineUI(
-                Boolean(state.is_running)
-            );
-
-
-            // ----------------------------------------------------
-            // Process new trades
-            // ----------------------------------------------------
-
-            const trades =
-                Array.isArray(state.trade_history)
-                    ? state.trade_history
-                    : [];
-
-
-            trades.forEach((trade, index) => {
-
-                /*
-                 * The backend currently doesn't assign a unique ID,
-                 * so we construct one from the trade properties.
-                 */
-
-                const tradeId =
-                    `${trade.time}_${trade.asset}_${trade.signal}_${index}`;
-
-                if (!knownTrades.has(tradeId)) {
-
-                    knownTrades.add(tradeId);
-
-                    addTradeToFeed(trade);
-                }
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Backend polling error:",
-                error
-            );
-
-            connectionStatus.textContent =
-                "Disconnected";
-
-            connectionStatus.className =
-                "rounded-full border border-red-500/20 bg-red-500/5 px-2.5 py-1 text-[9px] uppercase tracking-[0.15em] text-red-400";
-        }
-    }
-
-
-    // ============================================================
-    // ENGINE CONTROL
-    // ============================================================
-
-    async function toggleEngine() {
-
-        const currentlyRunning =
-            statusDot.classList.contains("running");
-
-        const action =
-            currentlyRunning
-                ? "stop"
-                : "start";
-
-        try {
-
-            const response = await fetch(
-                "/api/control",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-
-                    body: JSON.stringify({
-                        action: action
-                    })
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(
-                    `HTTP ${response.status}`
-                );
-            }
-
-            const state =
-                await response.json();
-
-            updateEngineUI(
-                Boolean(state.bot_state.is_running)
-            );
-
-        } catch (error) {
-
-            console.error(
-                "Engine control error:",
-                error
-            );
-
-            alert(
-                "Could not communicate with the trading engine."
-            );
-        }
-    }
-
-
-    // ============================================================
-    // UPDATE ENGINE UI
-    // ============================================================
-
-    function updateEngineUI(running) {
-
-        if (running) {
-
-            statusDot.classList.add("running");
-
-            engineStatus.textContent =
-                "Running";
-
-            engineStatus.className =
-                "text-[10px] font-medium uppercase tracking-[0.2em] text-lime";
-
-            engineButton.textContent =
-                "Stop Engine";
-
-            engineButton.className =
-                "rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-red-400 transition hover:bg-red-500/10";
-
-        } else {
-
-            statusDot.classList.remove("running");
-
-            engineStatus.textContent =
-                "Offline";
-
-            engineStatus.className =
-                "text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-500";
-
-            engineButton.textContent =
-                "Initialize Engine";
-
-            engineButton.className =
-                "rounded-xl border border-lime/20 bg-lime/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-lime transition hover:bg-lime/15 hover:shadow-[0_0_20px_rgba(117,224,99,0.15)]";
-        }
-    }
-
-
-    // ============================================================
-    // INTERVAL CONTROL
-    // ============================================================
-
-    intervalSelect.addEventListener(
-        "change",
-        async function () {
-
-            const interval =
-                Number(this.value);
-
-            try {
-
-                await fetch(
-                    "/api/control",
-                    {
-                        method: "POST",
-
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-
-                        body: JSON.stringify({
-                            interval: interval
-                        })
-                    }
-                );
-
-            } catch (error) {
-
-                console.error(
-                    "Interval update failed:",
-                    error
-                );
-            }
-        }
-    );
-
-
-    // ============================================================
-    // START APPLICATION
-    // ============================================================
-
-    initializeCanvas();
-
-    // Poll immediately
-    pollBackend();
-
-    // Poll every 3 seconds
-    setInterval(
-        pollBackend,
-        3000
-    );
-
+let running = false;
+let dirty = false;            // user touched a control; don't stomp it
+let nodes = [];
+
+const $ = id => document.getElementById(id);
+const n = (v, d = 5) =>
+  (v === null || v === undefined || v === "") ? "—" : Number(v).toFixed(d);
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 4200);
+}
+
+$("interval").addEventListener("change", () => { dirty = true; pushControl({ interval: +$("interval").value }); });
+$("risk").addEventListener("change", () => { dirty = true; pushControl({ risk_percent: +$("risk").value }); });
+
+async function pushControl(payload) {
+  try {
+    const r = await fetch("/api/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.status === "error") toast("⚠ " + j.message);
+  } catch (e) { toast("⚠ " + e.message); }
+}
+
+function toggleEngine() { pushControl({ action: running ? "stop" : "start" }).then(refresh); }
+
+async function closePosition(ticket, symbol) {
+  if (!confirm(`Close position ${ticket} on ${symbol}?\n\nThis sends a market order immediately.`)) return;
+  try {
+    const r = await fetch("/api/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket }),
+    });
+    const j = await r.json();
+    toast(j.result ? `Position ${ticket}: ${j.result.status}` : ("⚠ " + j.message));
+    refresh();
+  } catch (e) { toast("⚠ " + e.message); }
+}
+
+async function runAudit() {
+  toast("Auditor reviewing closed trades…");
+  try {
+    const r = await fetch("/api/audit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: true }),
+    });
+    const j = await r.json();
+    toast(j.result ? `[AUDITOR] ${j.result.message}` : ("⚠ " + j.message));
+    refresh();
+  } catch (e) { toast("⚠ " + e.message); }
+}
+
+function renderPositions(list) {
+  const body = $("positions"), empty = $("positionsEmpty");
+  body.innerHTML = "";
+  empty.style.display = list.length ? "none" : "block";
+
+  list.forEach(p => {
+    const pl = Number(p.profit || 0);
+    const row = document.createElement("tr");
+    row.innerHTML =
+      `<td class="mono">${p.ticket}</td>
+       <td><b>${p.symbol}</b></td>
+       <td class="side-${p.side}">${p.side}</td>
+       <td class="mono">${n(p.volume, 2)}</td>
+       <td class="mono">${n(p.price_open)}</td>
+       <td class="mono">${n(p.price_current)}</td>
+       <td class="mono">${p.sl ? n(p.sl) : "—"}</td>
+       <td class="mono">${p.tp ? n(p.tp) : "—"}</td>
+       <td class="mono ${pl >= 0 ? "pos" : "neg"}">${pl >= 0 ? "+" : ""}${pl.toFixed(2)}</td>
+       <td><button class="btn-ghost" style="padding:4px 11px;font-size:11.5px">Close</button></td>`;
+    row.querySelector("button").onclick = () => closePosition(p.ticket, p.symbol);
+    body.appendChild(row);
+  });
+}
+
+function renderRules(rules) {
+  const body = $("rules"), empty = $("rulesEmpty");
+  body.innerHTML = "";
+  empty.style.display = rules.length ? "none" : "block";
+  $("ruleCount").textContent = `${rules.length} active`;
+
+  rules.forEach(r => {
+    const row = document.createElement("tr");
+    row.innerHTML =
+      `<td><b>${r.affected_symbol || "ALL"}</b></td>
+       <td class="wrapcell">${r.setup || "—"}</td>
+       <td class="penalty">−${r.confidence_reduction_points ?? "?"}</td>
+       <td class="mono">${r.sample_size ?? "—"}</td>
+       <td class="wrapcell" style="color:var(--muted);font-size:12px">${r.evidence || "—"}</td>
+       <td><span class="pill ACTIVE">${r.status || "ACTIVE"}</span></td>`;
+    body.appendChild(row);
+  });
+}
+
+function renderLedger(history) {
+  const body = $("ledger"), empty = $("ledgerEmpty");
+  body.innerHTML = "";
+  empty.style.display = history.length ? "none" : "block";
+
+  history.slice().reverse().forEach(t => {
+    const row = document.createElement("tr");
+    row.innerHTML =
+      `<td class="mono">${new Date(t.time).toLocaleTimeString()}</td>
+       <td><b>${t.symbol}</b></td>
+       <td class="side-${t.side}">${t.side}</td>
+       <td class="mono">${n(t.entry_price)}</td>
+       <td class="mono">${n(t.stop_loss)}</td>
+       <td class="mono">${n(t.take_profit)}</td>
+       <td class="mono">${n(t.volume, 2)}</td>
+       <td class="mono">${n(t.risk_percent, 2)}</td>
+       <td class="mono">${t.deal}</td>
+       <td><span class="pill CONFIRMED">${t.status}</span></td>`;
+    body.appendChild(row);
+  });
+}
+
+/* ---- topology: one node per recent fill, edges between neighbours ---- */
+function syncNodes(history) {
+  const recent = history.slice(-14);
+  if (recent.length === nodes.length) return;
+
+  const c = $("topology");
+  const w = c.clientWidth || 400, h = 190;
+
+  nodes = recent.map((t, i) => ({
+    x: (w / (recent.length + 1)) * (i + 1),
+    y: h / 2 + Math.sin(i * 1.15) * 46,
+    side: t.side,
+    phase: Math.random() * Math.PI * 2,
+  }));
+}
+
+function drawTopology() {
+  const c = $("topology");
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth || 400, h = 190;
+
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!nodes.length) {
+    ctx.fillStyle = "#4d5f75";
+    ctx.font = "13px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("No trades to plot yet", w / 2, h / 2);
+    return;
+  }
+
+  const t = Date.now() / 1000;
+
+  ctx.strokeStyle = "rgba(61,139,253,.22)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < nodes.length; i++) {
+    ctx.beginPath();
+    ctx.moveTo(nodes[i - 1].x, nodes[i - 1].y);
+    ctx.lineTo(nodes[i].x, nodes[i].y);
+    ctx.stroke();
+  }
+
+  nodes.forEach(nd => {
+    const pulse = 3.6 + Math.sin(t * 1.9 + nd.phase) * 1.5;
+    const col = nd.side === "BUY" ? "0,214,143" : "255,77,106";
+
+    ctx.beginPath();
+    ctx.arc(nd.x, nd.y, pulse + 7, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col},.11)`;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(nd.x, nd.y, pulse, 0, Math.PI * 2);
+    ctx.fillStyle = `rgb(${col})`;
+    ctx.fill();
+  });
+
+  requestAnimationFrame(drawTopology);
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); }
+  catch { return; }
+
+  running = s.is_running;
+
+  $("equity").textContent = Number(s.equity || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  $("engineState").innerHTML =
+    `<span class="dot ${running ? "on" : "off"}"></span>${running ? "LIVE" : "IDLE"}`;
+  $("engineSub").textContent = running
+    ? `scanning every ${s.interval}s` : "scanning paused";
+
+  const btn = $("engineBtn");
+  btn.textContent = running ? "Stop Engine" : "Start Engine";
+  btn.className = running ? "btn-stop" : "btn-start";
+
+  $("confidence").textContent = s.last_confidence ?? 0;
+  $("confSub").textContent = `floor ${s.confidence_threshold ?? ""}`.trim() || "last decision";
+
+  const hist = s.trade_history || [];
+  $("fills").textContent = hist.length;
+
+  const sig = s.last_signal || "HOLD";
+  const badge = $("signalBadge");
+  badge.textContent = sig;
+  badge.className = "badge " + sig;
+
+  $("rationale").textContent = s.last_logic || "Waiting for the first decision…";
+  $("tEntry").textContent = n(s.last_entry_price);
+  $("tSL").textContent = n(s.last_stop_loss);
+  $("tTP").textContent = n(s.last_take_profit);
+
+  $("gRisk").textContent = `${Number(s.risk_percent || 0).toFixed(2)} %`;
+  $("gConf").textContent = `${s.last_confidence ?? 0} / 100`;
+  $("gInt").textContent = `${s.interval}s`;
+  $("gAudit").textContent = s.last_audit_at
+    ? new Date(s.last_audit_at).toLocaleString() : "never";
+
+  if (!dirty) {
+    $("interval").value = String(s.interval);
+    $("risk").value = Number(s.risk_percent).toFixed(1);
+  }
+
+  renderPositions(s.open_positions || []);
+  renderRules(s.learned_rules || []);
+  renderLedger(hist);
+  syncNodes(hist);
+}
+
+refresh();
+setInterval(refresh, 3000);
+drawTopology();
+window.addEventListener("resize", () => { nodes = []; });
 </script>
-
 </body>
 </html>
-```
