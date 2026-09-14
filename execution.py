@@ -13,11 +13,16 @@ import MetaTrader5 as mt5
 import config
 
 
+# MetaTrader5 exposes ORDER_FILLING_* constants in Python, but some
+# builds do not expose the matching SYMBOL_FILLING_* bit-mask names.
+_SYMBOL_FILLING_FOK = getattr(mt5, "SYMBOL_FILLING_FOK", 1)
+_SYMBOL_FILLING_IOC = getattr(mt5, "SYMBOL_FILLING_IOC", 2)
+
 # Preference order. FOK is the strictest and the most widely accepted
 # for market orders; RETURN is the fallback for exchange execution.
 _FILLING_PREFERENCE = (
-    (mt5.SYMBOL_FILLING_FOK, mt5.ORDER_FILLING_FOK),
-    (mt5.SYMBOL_FILLING_IOC, mt5.ORDER_FILLING_IOC),
+    (_SYMBOL_FILLING_FOK, mt5.ORDER_FILLING_FOK),
+    (_SYMBOL_FILLING_IOC, mt5.ORDER_FILLING_IOC),
 )
 
 

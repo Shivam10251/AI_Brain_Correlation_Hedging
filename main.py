@@ -44,19 +44,31 @@ from execution import close_position, execute_trade, get_open_positions
 bot_state = {
     "is_running": False,
     "interval": config.SCAN_INTERVAL_SECONDS,
+    "confidence_threshold": config.CONFIDENCE_THRESHOLD,
     "risk_percent": config.DEFAULT_RISK_PERCENT,
     "equity": 0.0,
     "last_logic": "",
     "last_confidence": 0,
     "last_signal": "HOLD",
+    "last_decision_symbol": None,
+    "last_decision_at": None,
+    "last_error": None,
+    "last_rejection": "",
+    "last_trade_status": "No decision yet",
     "last_entry_price": None,
     "last_stop_loss": None,
     "last_take_profit": None,
+    "scan_status": "stopped",
+    "current_symbol": None,
+    "last_scan_started_at": None,
+    "last_scan_completed_at": None,
     "trade_history": [],
     "open_positions": [],
     "learned_rules": [],
     "last_audit_at": None,
 }
+
+scan_wake_event = asyncio.Event()
 
 
 def _now():
@@ -191,11 +203,17 @@ async def control_bot(request: ControlRequest):
 
         if action == "start":
             bot_state["is_running"] = True
+            bot_state["scan_status"] = "starting"
+            bot_state["last_error"] = None
             print("[SYSTEM] engine STARTED")
+            scan_wake_event.set()
 
         elif action == "stop":
             bot_state["is_running"] = False
+            bot_state["scan_status"] = "stopped"
+            bot_state["current_symbol"] = None
             print("[SYSTEM] engine STOPPED")
+            scan_wake_event.set()
 
         else:
             return {
@@ -211,6 +229,8 @@ async def control_bot(request: ControlRequest):
             }
 
         bot_state["interval"] = int(request.interval)
+        print(f"[SYSTEM] scan interval set to {bot_state['interval']}s")
+        scan_wake_event.set()
 
     if request.risk_percent is not None:
         if not 0 < request.risk_percent <= 100:
@@ -285,6 +305,10 @@ def _existing_position(symbol, signal):
 async def _process_symbol(symbol):
     """One symbol, one decision, at most one order."""
 
+    bot_state["current_symbol"] = symbol
+    bot_state["scan_status"] = "analysing"
+    bot_state["last_error"] = None
+
     market_data = await asyncio.to_thread(fetch_multi_timeframe_data, symbol)
 
     bot_state["equity"] = market_data["equity"]
@@ -295,12 +319,20 @@ async def _process_symbol(symbol):
     confidence = decision["confidence_score"]
 
     bot_state["last_signal"] = signal
+    bot_state["last_decision_symbol"] = symbol
     bot_state["last_logic"] = decision.get("logic", "")
     bot_state["last_confidence"] = confidence
+    bot_state["last_decision_at"] = _now()
+    bot_state["last_rejection"] = ""
+    bot_state["last_trade_status"] = "Evaluating trade gate"
 
     print(f"[AI] {symbol} -> {signal} @ {confidence}")
 
     if signal not in {"BUY", "SELL"}:
+        bot_state["last_rejection"] = bot_state["last_logic"]
+        bot_state["last_trade_status"] = (
+            f"No trade: model returned {signal}"
+        )
         return
 
     same, opposite = await asyncio.to_thread(
@@ -311,10 +343,14 @@ async def _process_symbol(symbol):
     # Without this the bot re-enters the same direction on every scan,
     # compounding one opinion into an unbounded position.
     if same:
-        print(
+        message = (
             f"[DUPLICATE PREVENTED] {symbol}: already {signal} on "
             f"ticket {same[0]['ticket']}; not stacking another."
         )
+        print(message)
+        bot_state["last_rejection"] = message
+        bot_state["last_logic"] = message
+        bot_state["last_trade_status"] = "No trade: duplicate guard"
         return
 
     # --- reversal guard ------------------------------------------
@@ -331,11 +367,15 @@ async def _process_symbol(symbol):
             result = await asyncio.to_thread(close_position, position["ticket"])
 
             if result.get("status") != "CLOSED":
-                print(
+                message = (
                     f"[REVERSAL] {symbol}: close failed "
                     f"({result.get('message')}); skipping the entry so we "
                     f"do not end up hedged."
                 )
+                print(message)
+                bot_state["last_rejection"] = message
+                bot_state["last_logic"] = message
+                bot_state["last_trade_status"] = "No trade: reversal failed"
                 return
 
     # --- execute --------------------------------------------------
@@ -355,6 +395,7 @@ async def _process_symbol(symbol):
     bot_state["last_entry_price"] = fill["entry_price"]
     bot_state["last_stop_loss"] = fill["stop_loss"]
     bot_state["last_take_profit"] = fill["take_profit"]
+    bot_state["last_trade_status"] = f"Trade executed: {signal} {symbol}"
 
     # The market context is stored WITH the trade. This is the whole
     # basis of the audit later - without it a loss is just a number.
@@ -400,8 +441,16 @@ async def trading_loop():
     while True:
 
         if not bot_state["is_running"]:
-            await asyncio.sleep(1)
+            scan_wake_event.clear()
+            try:
+                await asyncio.wait_for(scan_wake_event.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                pass
             continue
+
+        bot_state["scan_status"] = "scanning"
+        bot_state["last_scan_started_at"] = _now()
+        bot_state["last_error"] = None
 
         for symbol in config.SYMBOLS:
 
@@ -412,7 +461,11 @@ async def trading_loop():
                 await _process_symbol(symbol)
 
             except Exception as error:              # noqa: BLE001
-                print(f"[ERROR] {symbol}: {error}")
+                message = f"{symbol}: {error}"
+                bot_state["last_error"] = message
+                bot_state["last_logic"] = f"Scan failed for {message}"
+                bot_state["scan_status"] = "error"
+                print(f"[ERROR] {message}")
 
         # --- after a complete scan --------------------------------
         try:
@@ -434,9 +487,23 @@ async def trading_loop():
                     _refresh_rules()
 
         except Exception as error:                  # noqa: BLE001
-            print(f"[LEARNING] post-scan reconciliation failed: {error}")
+            bot_state["last_error"] = (
+                f"post-scan reconciliation failed: {error}"
+            )
+            print(f"[LEARNING] {bot_state['last_error']}")
 
-        await asyncio.sleep(bot_state["interval"])
+        bot_state["current_symbol"] = None
+        bot_state["last_scan_completed_at"] = _now()
+        if bot_state["is_running"] and bot_state["scan_status"] != "error":
+            bot_state["scan_status"] = "waiting"
+
+        scan_wake_event.clear()
+        try:
+            await asyncio.wait_for(
+                scan_wake_event.wait(), timeout=bot_state["interval"]
+            )
+        except asyncio.TimeoutError:
+            pass
 
 
 if __name__ == "__main__":

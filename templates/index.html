@@ -180,6 +180,11 @@
       <div class="s" id="engineSub">scanning paused</div>
     </div>
     <div class="card">
+      <div class="k">Scanner</div>
+      <div class="v num" id="scanState">—</div>
+      <div class="s" id="scanSub">no scan yet</div>
+    </div>
+    <div class="card">
       <div class="k">AI Confidence</div>
       <div class="v num" id="confidence">—</div>
       <div class="s" id="confSub">last decision</div>
@@ -255,8 +260,15 @@
         <h2>Risk Framework Guardrails</h2>
         <div class="body" style="padding-top:6px;padding-bottom:8px">
           <div class="guard"><span>Risk per trade</span><span id="gRisk">—</span></div>
-          <div class="guard"><span>Confidence floor</span><span id="gConf">—</span></div>
+          <div class="guard"><span>Last confidence</span><span id="gConf">—</span></div>
+          <div class="guard"><span>Confidence floor</span><span id="gFloor">—</span></div>
+          <div class="guard"><span>Trade gate</span><span id="gGate">—</span></div>
           <div class="guard"><span>Scan interval</span><span id="gInt">—</span></div>
+          <div class="guard"><span>Current symbol</span><span id="gSymbol">—</span></div>
+          <div class="guard"><span>Decision symbol</span><span id="gDecisionSymbol">—</span></div>
+          <div class="guard"><span>Last decision</span><span id="gDecision">never</span></div>
+          <div class="guard"><span>Last scan</span><span id="gScan">never</span></div>
+          <div class="guard"><span>Last error</span><span id="gError">—</span></div>
           <div class="guard"><span>Duplicate guard</span><span style="color:var(--buy)">ENFORCED</span></div>
           <div class="guard"><span>Hedge guard</span><span style="color:var(--buy)">CLOSE-FIRST</span></div>
           <div class="guard"><span>Sizing</span><span>ATR / STOP-BASED</span></div>
@@ -300,6 +312,7 @@ let nodes = [];
 const $ = id => document.getElementById(id);
 const n = (v, d = 5) =>
   (v === null || v === undefined || v === "") ? "—" : Number(v).toFixed(d);
+const ts = value => value ? new Date(value).toLocaleTimeString() : "never";
 
 function toast(msg) {
   const t = $("toast");
@@ -498,6 +511,11 @@ async function refresh() {
   $("engineSub").textContent = running
     ? `scanning every ${s.interval}s` : "scanning paused";
 
+  const scanStatus = s.scan_status || (running ? "waiting" : "stopped");
+  $("scanState").textContent = scanStatus.toUpperCase();
+  $("scanSub").textContent = s.current_symbol
+    ? `symbol ${s.current_symbol}` : `last scan ${ts(s.last_scan_completed_at)}`;
+
   const btn = $("engineBtn");
   btn.textContent = running ? "Stop Engine" : "Start Engine";
   btn.className = running ? "btn-stop" : "btn-start";
@@ -520,7 +538,14 @@ async function refresh() {
 
   $("gRisk").textContent = `${Number(s.risk_percent || 0).toFixed(2)} %`;
   $("gConf").textContent = `${s.last_confidence ?? 0} / 100`;
+  $("gFloor").textContent = `${s.confidence_threshold ?? 65} / 100`;
+  $("gGate").textContent = s.last_trade_status || "—";
   $("gInt").textContent = `${s.interval}s`;
+  $("gSymbol").textContent = s.current_symbol || "—";
+  $("gDecisionSymbol").textContent = s.last_decision_symbol || "—";
+  $("gDecision").textContent = ts(s.last_decision_at);
+  $("gScan").textContent = ts(s.last_scan_completed_at);
+  $("gError").textContent = s.last_error || s.last_rejection || "—";
   $("gAudit").textContent = s.last_audit_at
     ? new Date(s.last_audit_at).toLocaleString() : "never";
 
